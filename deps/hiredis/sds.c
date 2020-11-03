@@ -220,6 +220,7 @@ hisds hi_sdsMakeRoomFor(hisds s, size_t addlen) {
 
     hdrlen = hi_sdsHdrSize(type);
     if (oldtype==type) {
+        // 多一位是为了 '/0' 字符
         newsh = hi_s_realloc(sh, hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
         s = (char*)newsh+hdrlen;
@@ -382,6 +383,7 @@ hisds hi_sdscatlen(hisds s, const void *t, size_t len) {
     if (s == NULL) return NULL;
     memcpy(s+curlen, t, len);
     hi_sdssetlen(s, curlen+len);
+    // 设置结尾字符
     s[curlen+len] = '\0';
     return s;
 }

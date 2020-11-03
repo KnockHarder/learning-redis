@@ -139,14 +139,18 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
         rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
+        // 条件1：有后继
+        // 条件2：后续分小于插入节点或后续分等同插入节点但后续节点的sds较小
         while (x->level[i].forward &&
                 (x->level[i].forward->score < score ||
                     (x->level[i].forward->score == score &&
                     sdscmp(x->level[i].forward->ele,ele) < 0)))
         {
+            // 加上当前节点到后继节点之前的跨度
             rank[i] += x->level[i].span;
             x = x->level[i].forward;
         }
+        // 记录最为一个节点为前一节点
         update[i] = x;
     }
     /* we assume the element is not already inside, since we allow duplicated
@@ -154,6 +158,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
      * caller of zslInsert() should test in the hash table if the element is
      * already inside or not. */
     level = zslRandomLevel();
+    // 如果需要扩展高度，则将扩展出的部分对应的前一个节点设置为head，并更新head中的span为原表长（即新表长-1）
     if (level > zsl->level) {
         for (i = zsl->level; i < level; i++) {
             rank[i] = 0;
@@ -164,11 +169,16 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     }
     x = zslCreateNode(level,score,ele);
     for (i = 0; i < level; i++) {
+        // 插入表中
         x->level[i].forward = update[i]->level[i].forward;
         update[i]->level[i].forward = x;
 
         /* update span covered by update[i] as x is inserted here */
+        // x.level[i]到下一含level[i]节点的span，为原上一含level[i]节点的下一含level[i]节点的span减去值k
+        // 设前一节点为A，则值k为head到A的span，减去head到上一含leve[i]节点的span，即为上一含leve[i]节点到A的span
+        // 这里注意level最小为1，所以rank[0]为head到A的距离
         x->level[i].span = update[i]->level[i].span - (rank[0] - rank[i]);
+        // 上一节点对应层的span更新为：k + 1
         update[i]->level[i].span = (rank[0] - rank[i]) + 1;
     }
 
