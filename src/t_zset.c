@@ -157,8 +157,10 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
      * scores, reinserting the same element should never happen since the
      * caller of zslInsert() should test in the hash table if the element is
      * already inside or not. */
+    // 读到这里，就基本明白了，跳跃表是尽可能通过高层节点进行跳跃，当跳跃跨度太大时，降低到下一层级
+    // 由于zslRandomLevel中使用的微循环累加的方式，因此层数出现的频率随层增加而呈指数级下降，因此在一定范围下(即不满足N >> 2^层级)时 ，能提供接近O(logN)级别的查询能力
     level = zslRandomLevel();
-    // 如果需要扩展高度，则将扩展出的部分对应的前一个节点设置为head，并更新head中的span为原表长（即新表长-1）
+    // 如果需要扩展高度，则将扩展出的部分对应的前一个节点设置为head，并更新head中的span为原表长（即新表长-1），即该层到尾部（NULL）的span
     if (level > zsl->level) {
         for (i = zsl->level; i < level; i++) {
             rank[i] = 0;
