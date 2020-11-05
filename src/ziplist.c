@@ -337,12 +337,18 @@ unsigned int zipStoreEntryEncoding(unsigned char *p, unsigned char encoding, uns
          * so we determine it here using the raw length. */
         if (rawlen <= 0x3f) {
             if (!p) return len;
+            // 长度小于64，用一位记录编码，编码与长度一致
             buf[0] = ZIP_STR_06B | rawlen;
+            // 此时buf[0]取值范围为 0 - 63
         } else if (rawlen <= 0x3fff) {
+            // 长度小于 64 * 256 时，用两位记录编码
             len += 1;
             if (!p) return len;
+            // buf[0]记录高位，且在高位前1个二进制位置1
             buf[0] = ZIP_STR_14B | ((rawlen >> 8) & 0x3f);
+            // buf[1]记录低位
             buf[1] = rawlen & 0xff;
+            // 此时buf[0]取值范围为 64 - 127
         } else {
             len += 4;
             if (!p) return len;
@@ -351,6 +357,7 @@ unsigned int zipStoreEntryEncoding(unsigned char *p, unsigned char encoding, uns
             buf[2] = (rawlen >> 16) & 0xff;
             buf[3] = (rawlen >> 8) & 0xff;
             buf[4] = rawlen & 0xff;
+            // 此时buf[0]取值为 128
         }
     } else {
         /* Implies integer encoding, so length is always 1. */
@@ -482,19 +489,26 @@ int zipTryEncoding(unsigned char *entry, unsigned int entrylen, long long *v, un
 
     if (entrylen >= 32 || entrylen == 0) return 0;
     if (string2ll((char*)entry,entrylen,&value)) {
+        // 字符串实际是整数
         /* Great, the string can be encoded. Check what's the smallest
          * of our encoding types that can hold this value. */
         if (value >= 0 && value <= 12) {
+            // 取值范围为 241 - 253
             *encoding = ZIP_INT_IMM_MIN+value;
         } else if (value >= INT8_MIN && value <= INT8_MAX) {
+            // 254
             *encoding = ZIP_INT_8B;
         } else if (value >= INT16_MIN && value <= INT16_MAX) {
+            // 192
             *encoding = ZIP_INT_16B;
         } else if (value >= INT24_MIN && value <= INT24_MAX) {
+            // 240
             *encoding = ZIP_INT_24B;
         } else if (value >= INT32_MIN && value <= INT32_MAX) {
+            // 208
             *encoding = ZIP_INT_32B;
         } else {
+            // 224
             *encoding = ZIP_INT_64B;
         }
         *v = value;
@@ -576,6 +590,10 @@ void zipEntry(unsigned char *p, zlentry *e) {
 
 /* Create a new empty ziplist. */
 unsigned char *ziplistNew(void) {
+    // ziplist由三部分组成
+    // 1. header部分: uint_32 - zlist总字节数，unit_32 - 尾部相对于ziplist指针的偏移量（单位字节）, uint16 - 存储条目的数量
+    // 2. 内容部分，由连续的内容条目组成
+    // 3. tail: uint_8 - 尾部标记为，固定为 ZIP_END
     unsigned int bytes = ZIPLIST_HEADER_SIZE+ZIPLIST_END_SIZE;
     unsigned char *zl = zmalloc(bytes);
     ZIPLIST_BYTES(zl) = intrev32ifbe(bytes);
@@ -790,10 +808,12 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
 
     /* Find out prevlen for the entry that is inserted. */
     if (p[0] != ZIP_END) {
+        // to read
         ZIP_DECODE_PREVLEN(p, prevlensize, prevlen);
     } else {
         unsigned char *ptail = ZIPLIST_ENTRY_TAIL(zl);
         if (ptail[0] != ZIP_END) {
+            // to read 尾部标记不为 ZIP_END
             prevlen = zipRawEntryLength(ptail);
         }
     }
@@ -818,6 +838,7 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
     int forcelarge = 0;
     nextdiff = (p[0] != ZIP_END) ? zipPrevLenByteDiff(p,reqlen) : 0;
     if (nextdiff == -4 && reqlen < 4) {
+        // to read
         nextdiff = 0;
         forcelarge = 1;
     }
@@ -829,6 +850,7 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
 
     /* Apply memory move when necessary and update tail offset. */
     if (p[0] != ZIP_END) {
+        // to read
         /* Subtract one because of the ZIP_END bytes */
         memmove(p+reqlen,p-nextdiff,curlen-offset-1+nextdiff);
 
@@ -858,13 +880,17 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
     /* When nextdiff != 0, the raw length of the next entry has changed, so
      * we need to cascade the update throughout the ziplist */
     if (nextdiff != 0) {
+        // to read
         offset = p-zl;
         zl = __ziplistCascadeUpdate(zl,p+reqlen);
         p = zl+offset;
     }
 
     /* Write the entry */
+    // 1或5个字节用于保存 prevlen
+    // 如果 prevlen 小于 254，则用1个字节保记录；否则用5个字符，第一个字节为254，后面跟32位无符号整数
     p += zipStorePrevEntryLength(p,prevlen);
+    // encoding如果为整数，用1位记录类型。当整数在0~12之间时，encoding同时记录了整数的值，数据长度为0。否则encoding只记录整数类型，数据长度与类型相关
     p += zipStoreEntryEncoding(p,encoding,slen);
     if (ZIP_IS_STR(encoding)) {
         memcpy(p,s,slen);
@@ -872,6 +898,10 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         zipSaveInteger(p,value,encoding);
     }
     ZIPLIST_INCR_LENGTH(zl,1);
+    // 至此每个条目的数据组成已较清晰，由以下几个部分组成
+    // 1. 前一个节点的长度: 1/5个字节存储，内容 to read
+    // 2. 编码方式，分字符串型编码和整数型编码。整数型为1字节记录编码，编码内容可得出值长度；字符串型用1/2/或5字节记录编码和长度。无论哪种类型的编码，通过首字字节即可推算出编码类型
+    // 3. 整数值或字符串值
     return zl;
 }
 
