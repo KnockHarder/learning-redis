@@ -808,12 +808,14 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
 
     /* Find out prevlen for the entry that is inserted. */
     if (p[0] != ZIP_END) {
-        // to read
+        // 解码获取prevlensize和prelen
+        // prelen为上一个entry的占用的字节数，prenlevsize为prevlen占用字节数
+        // 这里同样压缩了空间，当prelen小于254时，只使用一个节点存储长度；否则使用5个字节，第1个字节为标记位(254)，余下四个字节存储长度（int类型）
         ZIP_DECODE_PREVLEN(p, prevlensize, prevlen);
     } else {
         unsigned char *ptail = ZIPLIST_ENTRY_TAIL(zl);
+        // 如果ziplist非空
         if (ptail[0] != ZIP_END) {
-            // to read 尾部标记不为 ZIP_END
             prevlen = zipRawEntryLength(ptail);
         }
     }
@@ -836,11 +838,16 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
      * make sure that the next entry can hold this entry's length in
      * its prevlen field. */
     int forcelarge = 0;
+    // 计算插入处右侧节点更新prelen字段时所需空间大小的变动，值为 -4/0/4
+    // -4 空间较多，可以缩小4字节; 0 空间区域; 4 空间不足，需要扩大4节点
     nextdiff = (p[0] != ZIP_END) ? zipPrevLenByteDiff(p,reqlen) : 0;
     if (nextdiff == -4 && reqlen < 4) {
-        // to read
+        // 这是为了保证进行resize时空间不会缩小，避免数据丢失
         nextdiff = 0;
         forcelarge = 1;
+        // 以下无关紧要：
+        // reqlen小于4可推导出prelev小于ZIP_BIG_PREVLEN(254)，存储时只占用1个字节；encoding占用一个字节；数据占用一个字节
+        // 则若当前插入数据为整数x，则 INT8_MIN <= x <= INT8_MAX；若当前插入数据为字符串，则字符串只有单字母 
     }
 
     /* Store offset because a realloc may change the address of zl. */
@@ -850,16 +857,17 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
 
     /* Apply memory move when necessary and update tail offset. */
     if (p[0] != ZIP_END) {
-        // to read
         /* Subtract one because of the ZIP_END bytes */
         memmove(p+reqlen,p-nextdiff,curlen-offset-1+nextdiff);
 
+        // 更新插入处右侧节点的prelen的值
         /* Encode this entry's raw length in the next entry. */
         if (forcelarge)
             zipStorePrevEntryLengthLarge(p+reqlen,reqlen);
         else
             zipStorePrevEntryLength(p+reqlen,reqlen);
 
+        // 更新尾部偏移
         /* Update offset for tail */
         ZIPLIST_TAIL_OFFSET(zl) =
             intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))+reqlen);
@@ -867,7 +875,9 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         /* When the tail contains more than one entry, we need to take
          * "nextdiff" in account as well. Otherwise, a change in the
          * size of prevlen doesn't have an effect on the *tail* offset. */
+        // 解析插入节点右侧节点的值
         zipEntry(p+reqlen, &tail);
+        // 如果右侧节点不是最后一个元素，插入节点至最后一个节点间的长度可能变化变化，需要修正tail_offset
         if (p[reqlen+tail.headersize+tail.len] != ZIP_END) {
             ZIPLIST_TAIL_OFFSET(zl) =
                 intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))+nextdiff);
@@ -880,15 +890,14 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
     /* When nextdiff != 0, the raw length of the next entry has changed, so
      * we need to cascade the update throughout the ziplist */
     if (nextdiff != 0) {
-        // to read
+        // 更新了右侧节点的长度，导致后续一连串的节点可能需要更新相应的prelen字段
         offset = p-zl;
         zl = __ziplistCascadeUpdate(zl,p+reqlen);
         p = zl+offset;
     }
 
     /* Write the entry */
-    // 1或5个字节用于保存 prevlen
-    // 如果 prevlen 小于 254，则用1个字节保记录；否则用5个字符，第一个字节为254，后面跟32位无符号整数
+    // 1或5个字节用于保存 prevlen，如果 prevlen 小于 254，则用1个字节保记录；否则用5个字符，第一个字节为254，后面跟32位无符号整数
     p += zipStorePrevEntryLength(p,prevlen);
     // encoding如果为整数，用1位记录类型。当整数在0~12之间时，encoding同时记录了整数的值，数据长度为0。否则encoding只记录整数类型，数据长度与类型相关
     p += zipStoreEntryEncoding(p,encoding,slen);
@@ -897,11 +906,13 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
     } else {
         zipSaveInteger(p,value,encoding);
     }
+    // 注意这个宏里用了if判断，这意味着如果长度过大，zplist的长度信息将维持在最大值不再发生变化
+    // 之后，只能在获取长度时，通过 ziplistLen 方法，尝试在长度变小后恢复计数功能
     ZIPLIST_INCR_LENGTH(zl,1);
     // 至此每个条目的数据组成已较清晰，由以下几个部分组成
-    // 1. 前一个节点的长度: 1/5个字节存储，内容 to read
-    // 2. 编码方式，分字符串型编码和整数型编码。整数型为1字节记录编码，编码内容可得出值长度；字符串型用1/2/或5字节记录编码和长度。无论哪种类型的编码，通过首字字节即可推算出编码类型
-    // 3. 整数值或字符串值
+    // 1. 前一个节点的长度: 1/5个字节存储
+    // 2. 编码方式，分字符串型编码和整数型编码。整数型为1字节记录编码，编码内容可得出值长度；字符串型用1/2/或5字节记录编码和长度，编码和长度可能混合在一个字节内。无论哪种类型的编码，通过首字字节即可推算出编码类型
+    // 3. 实际值：整数值或字符串值
     return zl;
 }
 
