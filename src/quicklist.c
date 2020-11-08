@@ -331,6 +331,9 @@ REDIS_STATIC void __quicklistCompress(const quicklist *quicklist,
     if (!in_depth)
         quicklistCompressNode(node);
 
+    // depth一定 >=1，且depth = quidclist->compress + 1，depth为forward与reverse的深度
+    // 若depth=1，则 quicklist->compress=0，即不开户压缩
+    // 若depth=2，则quicklist->compress=1，即全部压缩，此时强制保留头尾节点不压缩
     if (depth > 2) {
         /* At this point, forward and reverse are one node beyond depth */
         quicklistCompressNode(forward);
@@ -432,12 +435,15 @@ REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
 
     int ziplist_overhead;
     /* size of previous offset */
+    // ZIP_BIG_PREVLEN = 254
+    // 这里计算的是后续节点prevlen区域需要的长度
     if (sz < 254)
         ziplist_overhead = 1;
     else
         ziplist_overhead = 5;
 
     /* size of forward offset */
+    // 这里加上的是该节点使用string编码时，编码及长度区域需要的字节数量
     if (sz < 64)
         ziplist_overhead += 1;
     else if (likely(sz < 16384))
@@ -448,10 +454,13 @@ REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
     /* new_sz overestimates if 'sz' encodes to an integer type */
     unsigned int new_sz = node->sz + sz + ziplist_overhead;
     if (likely(_quicklistNodeSizeMeetsOptimizationRequirement(new_sz, fill)))
+        // 新长度小于或等于对应等级的最大长度，此时 fill < 0
         return 1;
     else if (!sizeMeetsSafetyLimit(new_sz))
+        // 超出最大安全长度
         return 0;
     else if ((int)node->count < fill)
+        // ziplist中条目数小于 fill，此时 fill >= 0
         return 1;
     else
         return 0;
@@ -1004,11 +1013,13 @@ int quicklistDelRange(quicklist *quicklist, const long start,
         if (entry.offset == 0 && extent >= node->count) {
             /* If we are deleting more than the count of this node, we
              * can just delete the entire node without ziplist math. */
+            // 删除整个
             delete_entire_node = 1;
             del = node->count;
         } else if (entry.offset >= 0 && extent >= node->count) {
             /* If deleting more nodes after this one, calculate delete based
              * on size of current node. */
+            // 删除offset及后面的部分
             del = node->count - entry.offset;
         } else if (entry.offset < 0) {
             /* If offset is negative, we are in the first run of this loop
@@ -1016,6 +1027,7 @@ int quicklistDelRange(quicklist *quicklist, const long start,
              * from this start offset to end of list.  Since the Negative
              * offset is the number of elements until the tail of the list,
              * just use it directly as the deletion count. */
+            // 删除offset及后面部分或offset到extent部分
             del = -entry.offset;
 
             /* If the positive offset is greater than the remaining extent,

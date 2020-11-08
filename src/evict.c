@@ -280,6 +280,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
  * 16 bits. The returned time is suitable to be stored as LDT (last decrement
  * time) for the LFU implementation. */
 unsigned long LFUGetTimeInMinutes(void) {
+    // 2^16 - 1
     return (server.unixtime/60) & 65535;
 }
 

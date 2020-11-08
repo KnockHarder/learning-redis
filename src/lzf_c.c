@@ -136,11 +136,13 @@ lzf_compress (const void *const in_data, unsigned int in_len,
 
   lit = 0; op++; /* start run */
 
+  // 一次处理2个字节
   hval = FRST (ip);
   while (ip < in_end - 2)
     {
       LZF_HSLOT *hslot;
 
+      // 和下一单元重叠8bits作或操作
       hval = NEXT (hval, ip);
       hslot = htab + IDX (hval);
       ref = *hslot + LZF_HSLOT_BIAS; *hslot = ip - LZF_HSLOT_BIAS;

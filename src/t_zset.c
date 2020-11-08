@@ -1069,8 +1069,10 @@ unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
     double s;
 
     while (eptr != NULL) {
+        // 获取score条目
         sptr = ziplistNext(zl,eptr);
         serverAssert(sptr != NULL);
+        // zipEntry里存储的是分值
         s = zzlGetScore(sptr);
 
         if (s > score) {
@@ -1088,6 +1090,7 @@ unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
         }
 
         /* Move to next element. */
+        // 获取ele条目
         eptr = ziplistNext(zl,sptr);
     }
 
@@ -1330,10 +1333,15 @@ int zsetScore(robj *zobj, sds member, double *score) {
  * it if needed. */
 int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
     /* Turn options into simple to check vars. */
+    // 如果为增量，则score = score + old且newsocre=score
     int incr = (*flags & ZADD_INCR) != 0;
+    // 如果条目存在，则什么事都不做
     int nx = (*flags & ZADD_NX) != 0;
+    // 如果条目不存在，则什么事都不做
     int xx = (*flags & ZADD_XX) != 0;
+    // 新分数大于旧分数时才更新
     int gt = (*flags & ZADD_GT) != 0;
+    // 新分数小于旧分数时才更新
     int lt = (*flags & ZADD_LT) != 0;
     *flags = 0; /* We'll return our response flags. */
     double curscore;
@@ -1403,6 +1411,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
                 *flags |= ZADD_NOP;
                 return 1;
             }
+            // dict里key是sds，value是score
             curscore = *(double*)dictGetVal(de);
 
             /* Prepare the score for the increment if needed. */
@@ -1422,6 +1431,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
                 /* GT? Only update if score is greater than current. */
                 (!gt || score > curscore)) 
             {
+                // 更新zskiplist条目（删除再插入），并更新dict
                 znode = zslUpdateScore(zs->zsl,curscore,ele,score);
                 /* Note that we did not removed the original element from
                  * the hash table representing the sorted set, so we just
