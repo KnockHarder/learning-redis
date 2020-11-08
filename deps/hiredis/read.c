@@ -166,7 +166,7 @@ static int string2ll(const char *s, size_t slen, long long *value) {
     int negative = 0;
     unsigned long long v;
 
-    // 长度不为 0
+    // 闀垮害涓嶄负 0
     if (plen == slen)
         return REDIS_ERR;
 
