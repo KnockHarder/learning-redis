@@ -40,3 +40,4 @@ compile_commands.json
 redis.code-workspace
 .vs/*
 /deps/hiredis/out/build
+/deps/hiredis/CMakeSettings.json

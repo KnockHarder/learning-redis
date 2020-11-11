@@ -27,6 +27,7 @@ size_t lazyfreeGetPendingObjectsCount(void) {
  *
  * For lists the function returns the number of elements in the quicklist
  * representing the list. */
+// 计算需要多少次释放操作
 size_t lazyfreeGetFreeEffort(robj *obj) {
     if (obj->type == OBJ_LIST) {
         quicklist *ql = obj->ptr;
@@ -74,6 +75,7 @@ size_t lazyfreeGetFreeEffort(robj *obj) {
  * a lazy free list instead of being freed synchronously. The lazy free list
  * will be reclaimed in a different bio.c thread. */
 #define LAZYFREE_THRESHOLD 64
+// 释放空间动作过多时，将释放空间的动作提交到异步后台完成
 int dbAsyncDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
@@ -97,6 +99,7 @@ int dbAsyncDelete(redisDb *db, robj *key) {
          * equivalent to just calling decrRefCount(). */
         if (free_effort > LAZYFREE_THRESHOLD && val->refcount == 1) {
             atomicIncr(lazyfree_objects,1);
+            // 该方法内部使用了锁和信号使用多线程通信，实际可能因锁获取动作导致的阻塞
             bioCreateBackgroundJob(BIO_LAZY_FREE,val,NULL,NULL);
             dictSetVal(db->dict,de,NULL);
         }

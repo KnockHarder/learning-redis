@@ -154,6 +154,7 @@ robj *lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags) {
+    // 找之前会检查是否过期
     expireIfNeeded(db,key);
     return lookupKey(db,key,flags);
 }
@@ -1201,6 +1202,7 @@ long long getExpire(redisDb *db, robj *key) {
     /* The entry was found in the expire dict, this means it should also
      * be present in the main dict (safety check). */
     serverAssertWithInfo(NULL,key,dictFind(db->dict,key->ptr) != NULL);
+    // 值为带符号64位整数，表示过期时间戳，单位为毫秒
     return dictGetSignedIntegerVal(de);
 }
 

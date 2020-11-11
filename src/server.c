@@ -1272,6 +1272,7 @@ uint64_t dictEncObjHash(const void *key) {
             len = ll2string(buf,32,(long)o->ptr);
             return dictGenHashFunction((unsigned char*)buf, len);
         } else {
+            // 不会走到这里，getDecodedObject里目前仍然只允许处理字符串对象
             uint64_t hash;
 
             o = getDecodedObject(o);
@@ -1325,6 +1326,7 @@ dictType zsetDictType = {
 };
 
 /* Db->dict, keys are sds strings, vals are Redis objects. */
+// 数据库dict的key是sds类型
 dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
@@ -3035,6 +3037,7 @@ void initServer(void) {
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
+    // 将serverCron添加到eventLoop中
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
