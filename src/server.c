@@ -2013,6 +2013,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Check if a background saving or AOF rewrite in progress terminated. */
     if (hasActiveChildProcess() || ldbPendingChildren())
     {
+        // 这里通过检查子进程是否终止，如果子进程终止，且进行相应的hadler
         checkChildrenDone();
     } else {
         /* If there is not a background saving/rewrite in progress check if
@@ -2024,6 +2025,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
              * the given amount of seconds, and if the latest bgsave was
              * successful or if, in case of an error, at least
              * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */
+            // saveparams存放的时存储条件
+            // 1. 自上次存档后，数据变化量大于 sp->changes
+            // 2. 距上一次存档时间大于 sp->seconds
+            // 3. 上一次尝试保存成功，或者距上一次尝试间的时间少于 retry_delay
             if (server.dirty >= sp->changes &&
                 server.unixtime-server.lastsave > sp->seconds &&
                 (server.unixtime-server.lastbgsave_try >

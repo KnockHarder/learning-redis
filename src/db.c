@@ -503,7 +503,9 @@ int getFlushCommandFlags(client *c, int *flags) {
 
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
+    // 清空所有数据j库
     server.dirty += emptyDb(-1,flags,NULL);
+    // 如果有数据dump进程，中止进程
     if (server.rdb_child_pid != -1) killRDBChild();
     if (server.saveparamslen > 0) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
