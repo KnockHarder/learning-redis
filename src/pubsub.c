@@ -152,6 +152,7 @@ int pubsubSubscribeChannel(client *c, robj *channel) {
     int retval = 0;
 
     /* Add the channel to the client -> channels hash table */
+    // 将客户端注册到观察者队列中
     if (dictAdd(c->pubsub_channels,channel,NULL) == DICT_OK) {
         retval = 1;
         incrRefCount(channel);
@@ -322,6 +323,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         listIter li;
 
         listRewind(list,&li);
+        // 遍历观察者发送通知消息
         while ((ln = listNext(&li)) != NULL) {
             client *c = ln->value;
             addReplyPubsubMessage(c,channel,message);
