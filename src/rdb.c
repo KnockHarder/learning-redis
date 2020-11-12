@@ -1057,6 +1057,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
 
     /* Save the expire time */
     if (expiretime != -1) {
+        // 注意这里不会判断条目是否过期，因此dump文件里实际上可能会有过期的键值
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
