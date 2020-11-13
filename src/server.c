@@ -2025,7 +2025,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
              * the given amount of seconds, and if the latest bgsave was
              * successful or if, in case of an error, at least
              * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */
-            // saveparams存放的时存储条件
+            // saveparams存放的时存储条件(见initServerConfig部分代码)
             // 1. 自上次存档后，数据变化量大于 sp->changes
             // 2. 距上一次存档时间大于 sp->seconds
             // 3. 上一次尝试保存成功，或者距上一次尝试间的时间少于 retry_delay
@@ -5112,6 +5112,12 @@ int checkForSentinelMode(int argc, char **argv) {
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
     long long start = ustime();
+    // 优先使用AOF文件恢复数据
+    // 从initServerConfig中可以看出，aof_state取决于aof_enable配置，这意味着，即使rdb文件中有更准确的内容，
+    // 也会使用aof文件做数据恢复，如果aof文件为空，则数据库恢复为空。
+    // 因此如果在aof_enable=OFF的状态下工作了一段时间，不要通过修改redis.conf配置文件的方式打开AOF，
+    // 否则因为没有生成appendonly文件，在数据库重启时数据库将被清空。
+    // 正确的方式是通过`CONFIG SET`的方式，将`appendonly`置为`yes`，这样就可以生成appendonly文件了
     if (server.aof_state == AOF_ON) {
         if (loadAppendOnlyFile(server.aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
