@@ -392,6 +392,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 
         /* Call the multiplexing API, will return only on timeout or when
          * some event fires. */
+        // 获取事件（阻塞并设定超时）
         numevents = aeApiPoll(eventLoop, tvp);
 
         /* After sleep callback. */
