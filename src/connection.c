@@ -238,7 +238,7 @@ static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc fu
  */
 static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
     if (func == conn->read_handler) return C_OK;
-
+    // 设置readHandler的同时，添加相应的事件
     conn->read_handler = func;
     if (!conn->read_handler)
         aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);

@@ -2289,6 +2289,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     flushAppendOnlyFile(0);
 
     /* Handle writes with pending output buffers. */
+    // 将client的返回信息发送至客户端应用
     handleClientsWithPendingWritesUsingThreads();
 
     /* Close clients that need to be closed asynchronous */
@@ -2955,6 +2956,7 @@ void initServer(void) {
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Open the TCP listening socket for the user commands. */
+    // 监听TCP类型连接，并保留相应的描述符至server.ipfd
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == C_ERR)
         exit(1);
@@ -3050,6 +3052,7 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    // 创建tcp连接accept事件处理器，用于处理客户端发出的命令
     for (j = 0; j < server.ipfd_count; j++) {
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
             acceptTcpHandler,NULL) == AE_ERR)
@@ -3058,6 +3061,7 @@ void initServer(void) {
                     "Unrecoverable error creating server.ipfd file event.");
             }
     }
+    // 创建tls连接accept事件处理器，用于处理客户端发出的命令
     for (j = 0; j < server.tlsfd_count; j++) {
         if (aeCreateFileEvent(server.el, server.tlsfd[j], AE_READABLE,
             acceptTLSHandler,NULL) == AE_ERR)
@@ -3066,6 +3070,7 @@ void initServer(void) {
                     "Unrecoverable error creating server.tlsfd file event.");
             }
     }
+    // 创建unix socker file连接accept事件处理器，用于处理客户端发出的命令
     if (server.sofd > 0 && aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
         acceptUnixHandler,NULL) == AE_ERR) serverPanic("Unrecoverable error creating server.sofd file event.");
 
@@ -5421,6 +5426,7 @@ int main(int argc, char **argv) {
         linuxMemoryWarnings();
     #endif
         moduleInitModulesSystemLast();
+        // 加载modules
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();
         InitServerLast();

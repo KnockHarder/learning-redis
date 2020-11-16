@@ -217,6 +217,7 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
     te->finalizerProc = finalizerProc;
     te->clientData = clientData;
     te->prev = NULL;
+    // timeEvent是倒着排序的，后创建的在头部插入
     te->next = eventLoop->timeEventHead;
     te->refcount = 0;
     if (te->next)

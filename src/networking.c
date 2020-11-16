@@ -109,6 +109,8 @@ client *createClient(connection *conn) {
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
+        // 设置readHandler
+        // 看 CT_Socket 的定义知，同时会将eventloop添加事件，监听socket
         connSetReadHandler(conn, readQueryFromClient);
         connSetPrivateData(conn, c);
     }
@@ -179,6 +181,7 @@ client *createClient(connection *conn) {
     c->auth_module = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
+    // 将client放入server中
     if (conn) linkClient(c);
     initClientMultiState(c);
     return c;
@@ -252,6 +255,7 @@ int prepareClientToWrite(client *c) {
 
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
+    // 如果返回信息为空（未被使用过），将client添加至server.clients_pending_write
     if (!clientHasPendingReplies(c)) clientInstallWriteHandler(c);
 
     /* Authorize the caller to queue in the output buffer of this client. */
@@ -2060,6 +2064,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
+    // 解析并执行命令
      processInputBuffer(c);
 }
 
