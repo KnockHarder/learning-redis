@@ -101,6 +101,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
     UNUSED(mask);
 
+    // 处理重写过程中产生的AOF数据
     while(1) {
         ln = listFirst(server.aof_rewrite_buf_blocks);
         block = ln ? ln->value : NULL;
@@ -126,6 +127,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
     listNode *ln = listLast(server.aof_rewrite_buf_blocks);
     aofrwblock *block = ln ? ln->value : NULL;
 
+    // 将数据写入buf_blocks
     while(len) {
         /* If we already got at least an allocated block, try appending
          * at least some piece into it. */
@@ -160,6 +162,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
         }
     }
 
+    // 创建相应的事件等待aeMain进行事件处理
     /* Install a file event to send data to the rewrite child if there is
      * not one already. */
     if (aeGetFileEvents(server.el,server.aof_pipe_write_data_to_child) == 0) {
@@ -500,6 +503,12 @@ try_fsync:
         return;
 
     /* Perform the fsync if needed. */
+    // 大多数磁盘I/O都通过缓冲进行，当将数据写入文件时，内核通常先将该数据复制到其中一个缓冲区中，
+    // 等待其写满或者当内核需要重用该缓冲区以便存放其他磁盘块数据时，才将该缓冲排入输出队列
+    // 待其到达队首时，才进行实际的I/O操作。
+    // 这种输出方式被称为延迟写（delayed write），延迟写减少了磁盘读写次数。
+    // 但是却降低了文件内容的更新速度，当系统发生故障时，这种延迟可能造成文件更新内容的丢失。
+    // 为了保证磁盘文件系统与缓冲区高速缓存中内容的一致性，UNIX系统提供了sync、fsync和fdatasync三个函数。
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
         /* redis_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
@@ -646,6 +655,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
+    // 如果正在执行重写，需要将命令写入AOF重写缓冲区
     if (server.aof_child_pid != -1)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
@@ -1562,6 +1572,7 @@ int rewriteAppendOnlyFile(char *filename) {
     serverLog(LL_NOTICE,
         "Concatenating %.2f MB of AOF diff received from parent.",
         (double) sdslen(server.aof_child_diff) / (1024*1024));
+    // 将AOF重写缓存区中的内容加入AOF文件
     if (rioWrite(&aof,server.aof_child_diff,sdslen(server.aof_child_diff)) == 0)
         goto werr;
 
@@ -1638,6 +1649,7 @@ int aofCreatePipes(void) {
     if (anetNonBlock(NULL,fds[1]) != ANET_OK) goto error;
     if (aeCreateFileEvent(server.el, fds[2], AE_READABLE, aofChildPipeReadable, NULL) == AE_ERR) goto error;
 
+    // 创建管道线，将重写过程中产生的新数据纳入重写范围
     server.aof_pipe_write_data_to_child = fds[1];
     server.aof_pipe_read_data_from_parent = fds[0];
     server.aof_pipe_write_ack_to_parent = fds[3];
@@ -1685,6 +1697,7 @@ int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
     if (hasActiveChildProcess()) return C_ERR;
+    // 打开重写管道线，和主线程间通信
     if (aofCreatePipes() != C_OK) return C_ERR;
     openChildInfoPipe();
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
@@ -1693,6 +1706,7 @@ int rewriteAppendOnlyFileBackground(void) {
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
+        // 生成一个临时文件，且未进行rename
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             sendChildCOWInfo(CHILD_TYPE_AOF, "AOF rewrite");
@@ -1784,6 +1798,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         /* Flush the differences accumulated by the parent to the
          * rewritten AOF. */
         latencyStartMonitor(latency);
+        // 以追加模式打开子线程生成的临时文件
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
             (int)server.aof_child_pid);
         newfd = open(tmpfile,O_WRONLY|O_APPEND);
