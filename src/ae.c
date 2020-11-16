@@ -316,6 +316,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 
             id = te->id;
             te->refcount++;
+            // timeProc需要返回时间间隔
             retval = te->timeProc(eventLoop, id, te->clientData);
             te->refcount--;
             processed++;
@@ -393,7 +394,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 
         /* Call the multiplexing API, will return only on timeout or when
          * some event fires. */
-        // 获取事件（阻塞并设定超时）
+        // 获取文件事件（阻塞并设定超时）
         numevents = aeApiPoll(eventLoop, tvp);
 
         /* After sleep callback. */

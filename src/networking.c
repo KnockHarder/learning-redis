@@ -314,6 +314,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         tail->used = len;
         memcpy(tail->buf, s, len);
         listAddNodeTail(c->reply, tail);
+        // 记录总共申请的可用来存储输出内容的空间
         c->reply_bytes += tail->size;
     }
     asyncCloseClientOnOutputBufferLimitReached(c);
@@ -329,6 +330,7 @@ void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
+        // 如果buffer不够用，或者已经使用list存储，则将内容追加到list
         if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != C_OK)
             _addReplyProtoToList(c,obj->ptr,sdslen(obj->ptr));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
@@ -1387,6 +1389,7 @@ int writeToClient(client *c, int handler_installed) {
 
             /* If the buffer was sent, set bufpos to zero to continue with
              * the remainder of the reply. */
+            // 如果全部发送完毕，则重置缓冲区
             if ((int)c->sentlen == c->bufpos) {
                 c->bufpos = 0;
                 c->sentlen = 0;
@@ -1410,6 +1413,7 @@ int writeToClient(client *c, int handler_installed) {
             if (c->sentlen == objlen) {
                 c->reply_bytes -= o->size;
                 listDelNode(c->reply,listFirst(c->reply));
+                // setlen计算的是一个节点的已发送量
                 c->sentlen = 0;
                 /* If there are no longer objects in the list, we expect
                  * the count of reply bytes to be exactly zero. */
@@ -2857,6 +2861,8 @@ char *getClientTypeName(int class) {
  *
  * Return value: non-zero if the client reached the soft or the hard limit.
  *               Otherwise zero is returned. */
+// 检查输出内容大小是否超过硬性限制；如果超出软性限制，超出时长是否在限定范围内
+// 这里的大小指: 已发送内容大小 + 缓冲区内容大小
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
@@ -2890,6 +2896,7 @@ int checkClientOutputBufferLimits(client *c) {
             }
         }
     } else {
+        // 如果不是在软性超标状态，则清空时间记录
         c->obuf_soft_limit_reached_time = 0;
     }
     return soft || hard;
