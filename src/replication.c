@@ -2135,6 +2135,7 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Send a PING to check the master is able to reply without errors. */
+    // 如果正在连接中，则配置读处理函数，发送ping命令，并将状态转为等待ping返回
     if (server.repl_state == REPL_STATE_CONNECTING) {
         serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
@@ -2150,6 +2151,8 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Receive the PONG command. */
+    // 如果等待ping返回有结果了，读取首行数据，判断是否可ping通，如果通了，将状态置为待认证，并继续向下执行
+    // ping 命令的如果不需要认证返回值为 +PONG（shared.pong），或认证提醒（shared.noautherr）
     if (server.repl_state == REPL_STATE_RECEIVE_PONG) {
         err = sendSynchronousCommand(SYNC_CMD_READ,conn,NULL);
 
@@ -2177,6 +2180,7 @@ void syncWithMaster(connection *conn) {
     /* AUTH with the master if required. */
     if (server.repl_state == REPL_STATE_SEND_AUTH) {
         if (server.masteruser && server.masterauth) {
+            // 如果有auth认证信息，发送认证命令，并将状态设置为等待认证返回
             err = sendSynchronousCommand(SYNC_CMD_WRITE,conn,"AUTH",
                                          server.masteruser,server.masterauth,NULL);
             if (err) goto write_error;
@@ -2188,6 +2192,7 @@ void syncWithMaster(connection *conn) {
             server.repl_state = REPL_STATE_RECEIVE_AUTH;
             return;
         } else {
+            // 如果未配置认证信息，会将状态设置为向master发送端口的状态
             server.repl_state = REPL_STATE_SEND_PORT;
         }
     }
@@ -2489,6 +2494,7 @@ void replicationSetMaster(char *ip, int port) {
     int was_master = server.masterhost == NULL;
 
     sdsfree(server.masterhost);
+    // 需要将masterhost置空，不然释放连接到master的client时，会重新尝试连接master
     server.masterhost = NULL;
     if (server.master) {
         freeClient(server.master);
@@ -2506,16 +2512,19 @@ void replicationSetMaster(char *ip, int port) {
 
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
+    // 关闭所有从节点连接，并发送通知消息
     disconnectSlaves();
     cancelReplicationHandshake(0);
     /* Before destroying our master state, create a cached master using
      * our own parameters, to later PSYNC with the new master. */
     if (was_master) {
         replicationDiscardCachedMaster();
+        // 创建master客户端放到cached_master中
         replicationCacheMasterUsingMyself();
     }
 
     /* Fire the role change modules event. */
+    // 发送消息告知当前节点转为从节点，消息内容中带有主节点的地址信息
     moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
                           REDISMODULE_EVENT_REPLROLECHANGED_NOW_REPLICA,
                           NULL);
@@ -2762,6 +2771,7 @@ void replicationSendAck(void) {
  * replicationResurrectCachedMaster() that is used after a successful PSYNC
  * handshake in order to reactivate the cached master.
  */
+// 将当前master缓冲区清空，并移交给cached_master等待断开连接
 void replicationCacheMaster(client *c) {
     serverAssert(server.master != NULL && server.cached_master == NULL);
     serverLog(LL_NOTICE,"Caching the disconnected master state.");

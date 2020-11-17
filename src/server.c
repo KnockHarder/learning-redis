@@ -4047,13 +4047,17 @@ void pingCommand(client *c) {
     }
 
     if (c->flags & CLIENT_PUBSUB && c->resp == 2) {
+        // 返回一行数据 *2\r\n
         addReply(c,shared.mbulkhdr[2]);
+        // 返回实际内容 pong
         addReplyBulkCBuffer(c,"pong",4);
+        // 返回请求参数
         if (c->argc == 1)
             addReplyBulkCBuffer(c,"",0);
         else
             addReplyBulk(c,c->argv[1]);
     } else {
+        // 返回 pong 或者请求参数
         if (c->argc == 1)
             addReply(c,shared.pong);
         else

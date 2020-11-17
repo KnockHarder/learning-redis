@@ -1344,7 +1344,7 @@ struct redisServer {
     /* Replication (slave) */
     char *masteruser;               /* AUTH with this user and masterauth with master */
     char *masterauth;               /* AUTH with this password with master */
-    char *masterhost;               /* Hostname of master */
+    char *masterhost;               /* Hostname of master */ // 当前节点为从节点时，记录主节点地址信息
     int masterport;                 /* Port of master */
     int repl_timeout;               /* Timeout after N seconds of master idle */
     client *master;     /* Client that is master for this slave */

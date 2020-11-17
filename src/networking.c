@@ -751,8 +751,11 @@ void addReplyBulk(client *c, robj *obj) {
 
 /* Add a C buffer as bulk reply */
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
+	// 追加一行数据 $<len>\r\n 用于说明返回值长度
     addReplyLongLongWithPrefix(c,len,'$');
+    // 将实际返回内容追加到缓冲区
     addReplyProto(c,p,len);
+    // 追加换行符 \r\n
     addReply(c,shared.crlf);
 }
 
@@ -934,6 +937,7 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+// 当连接为unixSocket时，flags记录连接类型，否则为0
 static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     client *c;
     char conninfo[100];
@@ -2052,6 +2056,7 @@ void readQueryFromClient(connection *conn) {
     }
 
     sdsIncrLen(c->querybuf,nread);
+    // 设置最后一次交互的时间，便于服务器回收长时间空转的client
     c->lastinteraction = server.unixtime;
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
     atomicIncr(server.stat_net_input_bytes, nread);
