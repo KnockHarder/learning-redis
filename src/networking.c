@@ -3022,6 +3022,8 @@ int clientsArePaused(void) {
  * write, close sequence needed to serve a client.
  *
  * The function returns the total number of events processed. */
+// 从AOF/RDB中加载数据时的过程中每加载一部分数据会调一次
+// lua脚本超时时会调用一次
 void processEventsWhileBlocked(void) {
     int iterations = 4; /* See the function top-comment. */
 
