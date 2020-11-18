@@ -488,11 +488,13 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     char buf[128];
     int buflen;
 
+    // 设置repl_offset，并将状态配置为等待 bgsave 结束
     slave->psync_initial_offset = offset;
     slave->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
      * slave as well. Set slaveseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
+    // 创建保存任务前已配置了db
     server.slaveseldb = -1;
 
     /* Don't send this reply to slaves that approached us with
@@ -648,6 +650,7 @@ int startBgsaveForReplication(int mincapa) {
     rsiptr = rdbPopulateSaveInfo(&rsi);
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise slave will miss repl-stream-db. */
+    // 创建后台保存任务
     if (rsiptr) {
         if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
@@ -695,6 +698,7 @@ int startBgsaveForReplication(int mincapa) {
             client *slave = ln->value;
 
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
+                // 配置 repl_offset 并将状态变更到 wait_bgsave_end 状态
                     replicationSetupSlaveForFullResync(slave,
                             getPsyncInitialOffset());
             }
@@ -703,11 +707,13 @@ int startBgsaveForReplication(int mincapa) {
 
     /* Flush the script cache, since we need that slave differences are
      * accumulated without requiring slaves to match our cached scripts. */
+    // 清空脚本缓存
     if (retval == C_OK) replicationScriptCacheFlush();
     return retval;
 }
 
 /* SYNC and PSYNC command implementation. */
+// 触发rdb
 void syncCommand(client *c) {
     /* ignore SYNC if already slave or in monitor mode */
     if (c->flags & CLIENT_SLAVE) return;
@@ -765,6 +771,7 @@ void syncCommand(client *c) {
 
     /* Setup the slave as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the slave differently. */
+    // 将客户端状态配置为 wati_bgsave 状态
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay)
         connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
@@ -875,6 +882,7 @@ void replconfCommand(client *c) {
     /* Process every option-value pair. */
     for (j = 1; j < c->argc; j+=2) {
         if (!strcasecmp(c->argv[j]->ptr,"listening-port")) {
+            // 从节点端口
             long port;
 
             if ((getLongFromObjectOrReply(c,c->argv[j+1],
@@ -882,6 +890,7 @@ void replconfCommand(client *c) {
                 return;
             c->slave_listening_port = port;
         } else if (!strcasecmp(c->argv[j]->ptr,"ip-address")) {
+            // 从节点ip
             sds ip = c->argv[j+1]->ptr;
             if (sdslen(ip) < sizeof(c->slave_ip)) {
                 memcpy(c->slave_ip,ip,sdslen(ip)+1);
@@ -891,6 +900,7 @@ void replconfCommand(client *c) {
                 return;
             }
         } else if (!strcasecmp(c->argv[j]->ptr,"capa")) {
+            // 从节点拥有的能力
             /* Ignore capabilities not understood by this master. */
             if (!strcasecmp(c->argv[j+1]->ptr,"eof"))
                 c->slave_capa |= SLAVE_CAPA_EOF;
@@ -1044,6 +1054,7 @@ void sendBulkToSlave(connection *conn) {
     }
 
     /* If the preamble was already transferred, send the RDB bulk data. */
+    // 文件会被多个从节点使用，因此需要先进行seek
     lseek(slave->repldbfd,slave->repldboff,SEEK_SET);
     buflen = read(slave->repldbfd,buf,PROTO_IOBUF_LEN);
     if (buflen <= 0) {
@@ -1062,10 +1073,13 @@ void sendBulkToSlave(connection *conn) {
     }
     slave->repldboff += nwritten;
     atomicIncr(server.stat_net_output_bytes, nwritten);
+    // 内容全部传输完毕
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
+        // 将writeHandler置空，看connSocketSetWriteHandler会知道这里其实是删除当前文件事件
         connSetWriteHandler(slave->conn,NULL);
+        // 变更为online状态
         putSlaveOnline(slave);
     }
 }
@@ -1272,6 +1286,9 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->repl_put_online_on_ack = 1;
                 slave->repl_ack_time = server.unixtime; /* Timeout otherwise. */
             } else {
+                // 将rdb文件设为salve的replfd，初始化offset和size，并将状态配置为发送状态（并未实际发送）。
+                // 同时为connection配置输出函数，socket类型的set方法会创建事件函数(connSocketSetWriteHandler)，
+                // 因此在eventloop中会对逐步输出内容到从节点
                 if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(slave->repldbfd,&buf) == -1) {
                     freeClient(slave);
@@ -1664,9 +1681,11 @@ void readSyncBulkPayload(connection *conn) {
      * handler, otherwise it will get called recursively since
      * rdbLoad() will call the event loop to process events from time to
      * time for non blocking loading. */
+    // 删除事件
     connSetReadHandler(conn, NULL);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    // 开始恢复数据
     if (use_diskless_load) {
         rio rdb;
         rioInitWithConn(&rdb,conn,server.repl_transfer_size);
@@ -2192,12 +2211,13 @@ void syncWithMaster(connection *conn) {
             server.repl_state = REPL_STATE_RECEIVE_AUTH;
             return;
         } else {
-            // 如果未配置认证信息，会将状态设置为向master发送端口的状态
+            // 如果未配置认证信息，会将状态设置为向master发送端口的状态，并继续执行下面的代码
             server.repl_state = REPL_STATE_SEND_PORT;
         }
     }
 
     /* Receive AUTH reply. */
+    // 通过认证，将状态置为向master发送状态，并继续执行下面的代码
     if (server.repl_state == REPL_STATE_RECEIVE_AUTH) {
         err = sendSynchronousCommand(SYNC_CMD_READ,conn,NULL);
         if (err[0] == '-') {
@@ -2211,6 +2231,8 @@ void syncWithMaster(connection *conn) {
 
     /* Set the slave port, so that Master's INFO command can list the
      * slave listening port correctly. */
+    // 发送当前实例的监听端口，并将状态置为等待返回状态
+    // REPLCONF命令的返回结果为 OK
     if (server.repl_state == REPL_STATE_SEND_PORT) {
         int port;
         if (server.slave_announce_port) port = server.slave_announce_port;
@@ -2227,6 +2249,7 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Receive REPLCONF listening-port reply. */
+    // 将状态置为发送IP状态，向下执行
     if (server.repl_state == REPL_STATE_RECEIVE_PORT) {
         err = sendSynchronousCommand(SYNC_CMD_READ,conn,NULL);
         /* Ignore the error if any, not all the Redis versions support
@@ -2248,6 +2271,7 @@ void syncWithMaster(connection *conn) {
 
     /* Set the slave ip, so that Master's INFO command can list the
      * slave IP address port correctly in case of port forwarding or NAT. */
+    // 如果配置了 replica-announce-ip/salve-announce-ip，会发送ip至master
     if (server.repl_state == REPL_STATE_SEND_IP) {
         err = sendSynchronousCommand(SYNC_CMD_WRITE,conn,"REPLCONF",
                 "ip-address",server.slave_announce_ip, NULL);
@@ -2276,6 +2300,7 @@ void syncWithMaster(connection *conn) {
      * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
      *
      * The master will ignore capabilities it does not understand. */
+    // 告知master当前节点拥有的能力（应该是为了兼容），置为等待返回状态
     if (server.repl_state == REPL_STATE_SEND_CAPA) {
         err = sendSynchronousCommand(SYNC_CMD_WRITE,conn,"REPLCONF",
                 "capa","eof","capa","psync2",NULL);
@@ -2286,6 +2311,7 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Receive CAPA reply. */
+    // 收到返回后，进入下一阶段
     if (server.repl_state == REPL_STATE_RECEIVE_CAPA) {
         err = sendSynchronousCommand(SYNC_CMD_READ,conn,NULL);
         /* Ignore the error if any, not all the Redis versions support
@@ -2303,6 +2329,8 @@ void syncWithMaster(connection *conn) {
      * to start a full resynchronization so that we get the master replid
      * and the global offset, to try a partial resync at the next
      * reconnection attempt. */
+    // 发送PSYNC命令，并将当前状态置为等待
+    // PSYNC命令有两个参数 replyId 与 repoff
     if (server.repl_state == REPL_STATE_SEND_PSYNC) {
         if (slaveTryPartialResynchronization(conn,0) == PSYNC_WRITE_ERROR) {
             err = sdsnew("Write error sending the PSYNC command.");
@@ -2378,6 +2406,7 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Setup the non blocking download of the bulk file. */
+    // 接收同步过来的db文件
     if (connSetReadHandler(conn, readSyncBulkPayload)
             == C_ERR)
     {
@@ -2388,6 +2417,7 @@ void syncWithMaster(connection *conn) {
         goto error;
     }
 
+    // 状态变更为接收中
     server.repl_state = REPL_STATE_TRANSFER;
     server.repl_transfer_size = -1;
     server.repl_transfer_read = 0;
