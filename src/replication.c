@@ -494,7 +494,6 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     /* We are going to accumulate the incremental changes for this
      * slave as well. Set slaveseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
-    // 创建保存任务前已配置了db
     server.slaveseldb = -1;
 
     /* Don't send this reply to slaves that approached us with
@@ -639,6 +638,7 @@ need_full_resync:
  * Returns C_OK on success or C_ERR otherwise. */
 int startBgsaveForReplication(int mincapa) {
     int retval;
+    // 如果使用diskless方式同步，需要客户端是支持EOF标志校验的版本
     int socket_target = server.repl_diskless_sync && (mincapa & SLAVE_CAPA_EOF);
     listIter li;
     listNode *ln;
@@ -1033,6 +1033,7 @@ void sendBulkToSlave(connection *conn) {
     /* Before sending the RDB file, we send the preamble as configured by the
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
+    // 先发送rdb文件大小信息
     if (slave->replpreamble) {
         nwritten = connWrite(conn,slave->replpreamble,sdslen(slave->replpreamble));
         if (nwritten == -1) {
@@ -1134,6 +1135,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
     serverAssert(server.rdb_pipe_numconns_writing==0);
 
     while (1) {
+        // 从pip中读数据
         server.rdb_pipe_bufflen = read(fd, server.rdb_pipe_buff, PROTO_IOBUF_LEN);
         if (server.rdb_pipe_bufflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -1151,6 +1153,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             return;
         }
 
+        // 数据读取完毕
         if (server.rdb_pipe_bufflen == 0) {
             /* EOF - write end was closed. */
             int stillUp = 0;
@@ -1166,12 +1169,14 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             /* Now that the replicas have finished reading, notify the child that it's safe to exit. 
              * When the server detectes the child has exited, it can mark the replica as online, and
              * start streaming the replication buffers. */
+            // 唤醒阻塞的子进程
             close(server.rdb_child_exit_pipe);
             server.rdb_child_exit_pipe = -1;
             return;
         }
 
         int stillAlive = 0;
+        // 向每个client发送数据
         for (i=0; i < server.rdb_pipe_numconns; i++)
         {
             int nwritten;
@@ -1199,6 +1204,8 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != server.rdb_pipe_bufflen) {
+                // 创建任务继续尝试写数据到客户端
+                // 这里记录数量以便于当所有写任务完成后，回到当前任务
                 server.rdb_pipe_numconns_writing++;
                 connSetWriteHandler(conn, rdbPipeWriteHandler);
             }
@@ -1210,6 +1217,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             killRDBChild();
         }
         /*  Remove the pipe read handler if at least one write handler was set. */
+        // 有客户端发送数据没完成，暂停当前任务
         if (server.rdb_pipe_numconns_writing || stillAlive == 0) {
             aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
             break;
@@ -1296,6 +1304,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                     continue;
                 }
                 slave->repldboff = 0;
+                // 将回复内容大小设置为文件大小
                 slave->repldbsize = buf.st_size;
                 slave->replstate = SLAVE_STATE_SEND_BULK;
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
@@ -1500,6 +1509,7 @@ void readSyncBulkPayload(connection *conn) {
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
      * from the master reply. */
+    // 第一次接收到回复，会先接收到rdb文件的大小信息（传文件模式）或者eof标志（diskless模式）
     if (server.repl_transfer_size == -1) {
         if (connSyncReadLine(conn,buf,1024,server.repl_syncio_timeout*1000) == -1) {
             serverLog(LL_WARNING,
@@ -1535,6 +1545,7 @@ void readSyncBulkPayload(connection *conn) {
          * delimiter is long and random enough that the probability of a
          * collision with the actual file content can be ignored. */
         if (strncmp(buf+1,"EOF:",4) == 0 && strlen(buf+5) >= CONFIG_RUN_ID_SIZE) {
+            // diskless传输模式
             usemark = 1;
             memcpy(eofmark,buf+5,CONFIG_RUN_ID_SIZE);
             memset(lastbytes,0,CONFIG_RUN_ID_SIZE);
@@ -1555,6 +1566,7 @@ void readSyncBulkPayload(connection *conn) {
         return;
     }
 
+    // 本地不使用diskless模式，内容将被保存到临时文件（临时文件已在 syncWithMaster 中生成并绑定）
     if (!use_diskless_load) {
         /* Read the data from the socket, store it to a file and search
          * for the EOF. */
@@ -1583,6 +1595,7 @@ void readSyncBulkPayload(connection *conn) {
         int eof_reached = 0;
 
         if (usemark) {
+            // 更新lastbytes，并检测是否为eofmark
             /* Update the last bytes array, and check if it matches our
              * delimiter. */
             if (nread >= CONFIG_RUN_ID_SIZE) {
@@ -1625,6 +1638,7 @@ void readSyncBulkPayload(connection *conn) {
         /* Sync data on disk from time to time, otherwise at the end of the
          * transfer we may suffer a big delay as the memory buffers are copied
          * into the actual disk. */
+        // 缓冲区内容过多时，强制同步文件
         if (server.repl_transfer_read >=
             server.repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC)
         {
@@ -1681,17 +1695,22 @@ void readSyncBulkPayload(connection *conn) {
      * handler, otherwise it will get called recursively since
      * rdbLoad() will call the event loop to process events from time to
      * time for non blocking loading. */
-    // 删除事件
+    // 删除事件，走到这里，有两种可能
+    // 一种是文件已读取完毕，并保存到本地临时文件（非diskless模式）
+    // 另一种是使用了diskless模式，下文会进行处理
     connSetReadHandler(conn, NULL);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-    // 开始恢复数据
     if (use_diskless_load) {
+		// 使用diskless模式，将connect设置为阻塞模式，直接从socket中获取数据并替换旧的数据库
+		// 这种情况会阻塞主进程，直至同步完毕或出现异常
         rio rdb;
+        // 创建一个使用connection的io对象(rioConnIO)
         rioInitWithConn(&rdb,conn,server.repl_transfer_size);
 
         /* Put the socket in blocking mode to simplify RDB transfer.
          * We'll restore it when the RDB is received. */
+        // 将socket设置为阻塞模式，并配置超时时间
         connBlock(conn);
         connRecvTimeout(conn, server.repl_timeout*1000);
         startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION);
@@ -1747,6 +1766,7 @@ void readSyncBulkPayload(connection *conn) {
         connNonBlock(conn);
         connRecvTimeout(conn,0);
     } else {
+        // 从临时文件中重置数据库
         /* Ensure background save doesn't overwrite synced data */
         if (server.rdb_child_pid != -1) {
             serverLog(LL_NOTICE,

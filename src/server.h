@@ -1371,7 +1371,7 @@ struct redisServer {
      * the server->master client structure. */
     char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
     long long master_initial_offset;           /* Master PSYNC offset. */
-    int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
+    int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */ // 从主数据库同步数据时，替换旧数据库的策略
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */

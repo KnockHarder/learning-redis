@@ -2585,6 +2585,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         rioFreeFd(&rdb);
         /* wake up the reader, tell it we're done. */
         close(rdb_pipe_write);
+        // 阻塞直到父线程关闭写通道
         close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
         /* hold exit until the parent tells us it's safe. we're not expecting
          * to read anything, just get the error when the pipe is closed. */
