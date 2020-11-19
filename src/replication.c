@@ -176,9 +176,12 @@ void feedReplicationBacklog(void *ptr, size_t len) {
         p += thislen;
         server.repl_backlog_histlen += thislen;
     }
+    // 环状buffer，如果hist_len大于size，说明部分内容被覆盖
     if (server.repl_backlog_histlen > server.repl_backlog_size)
         server.repl_backlog_histlen = server.repl_backlog_size;
     /* Set the offset of the first byte we have in the backlog. */
+    // 如果没有出现覆盖，则该值为backlog开始的地方
+    // 如果出现覆盖，则该值该值向右偏移了被覆盖的长度
     server.repl_backlog_off = server.master_repl_offset -
                               server.repl_backlog_histlen + 1;
 }
@@ -205,6 +208,7 @@ void feedReplicationBacklogWithObject(robj *o) {
  * the commands received by our clients in order to create the replication
  * stream. Instead if the instance is a slave and has sub-slaves attached,
  * we use replicationFeedSlavesFromMasterStream() */
+// 将命令同步到slaves
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -226,6 +230,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
     /* Send SELECT command to every slave if needed. */
+    // 如果切换了数据库，则发送select命令，同时将select命令添加到backlog
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
 
@@ -259,10 +264,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     server.slaveseldb = dictid;
 
     /* Write the command to the replication backlog if any. */
+    // 将命令添加到backlog
     if (server.repl_backlog) {
         char aux[LONG_STR_SIZE+3];
 
         /* Add the multi bulk reply length. */
+        // 添加参数个数
         aux[0] = '*';
         len = ll2string(aux+1,sizeof(aux)-1,argc);
         aux[len+1] = '\r';
@@ -270,6 +277,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         feedReplicationBacklog(aux,len+3);
 
         for (j = 0; j < argc; j++) {
+			// 添加当前参数长度、当前参数值
             long objlen = stringObjectLen(argv[j]);
 
             /* We need to feed the buffer with the object as a bulk reply
@@ -298,10 +306,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * or are already in sync with the master. */
 
         /* Add the multi bulk length. */
+        // 发送参数个数
         addReplyArrayLen(slave,argc);
 
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
+        // 发送参数
         for (j = 0; j < argc; j++)
             addReplyBulk(slave,argv[j]);
     }
@@ -928,6 +938,7 @@ void replconfCommand(client *c) {
              * quick check first (instead of waiting for the next ACK. */
             if (server.rdb_child_pid != -1 && c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)
                 checkChildrenDone();
+            // 激活因为未收到ack而无法online的client
             if (c->repl_put_online_on_ack && c->replstate == SLAVE_STATE_ONLINE)
                 putSlaveOnline(c);
             /* Note: this command does not reply anything! */
@@ -964,6 +975,7 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
+    // 期间可能有没有发送的reply，需要将reply中的内容发送到客户端
     if (connSetWriteHandler(slave->conn, sendReplyToClient) == C_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
@@ -1291,6 +1303,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                  * the RDB trasfer with the start of the other replication
                  * data. */
                 slave->replstate = SLAVE_STATE_ONLINE;
+                // reply中的内容仍不能被冲刷
                 slave->repl_put_online_on_ack = 1;
                 slave->repl_ack_time = server.unixtime; /* Timeout otherwise. */
             } else {
@@ -1624,6 +1637,8 @@ void readSyncBulkPayload(connection *conn) {
         server.repl_transfer_read += nread;
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
+        // 需要去除结尾多余的40个字节，以保证与正常生成的RDB文件格式一致
+        // 其实这里即时没有去除多余的字节，也不影响RDB文件的转入，因为会在RDB内容结束处插入EOF标志
         if (usemark && eof_reached) {
             if (ftruncate(server.repl_transfer_fd,
                 server.repl_transfer_read - CONFIG_RUN_ID_SIZE) == -1)
@@ -1863,6 +1878,8 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
+    // 需要发送ack信息，告诉服务器已完成对数据的接收
+    // 避免因40byte标志位错误，导致后续收到的数据被当做rdb文件处理
     if (usemark) replicationSendAck();
 
     /* Restart the AOF subsystem now that we finished the sync. This

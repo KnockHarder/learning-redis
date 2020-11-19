@@ -198,6 +198,8 @@ void clientInstallWriteHandler(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for slaves, if the slave can actually receive
      * writes at this stage. */
+    // 1. 输出未被pending
+    // 2. 客户端位于初始状态 或 客户端在线且已激活 (diskless传输模式，需要通过ack确保从节点已结束同步状态)
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack)))

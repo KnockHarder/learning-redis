@@ -1211,6 +1211,7 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         redisDb *db = server.db+j;
         dict *d = db->dict;
         if (dictSize(d) == 0) continue;
+        // 因为是多进程的，因此需要创建safe的迭代器，避免其他进程进行rehash操作
         di = dictGetSafeIterator(d);
 
         /* Write the SELECT DB opcode */
