@@ -2060,6 +2060,7 @@ void readQueryFromClient(connection *conn) {
     sdsIncrLen(c->querybuf,nread);
     // 设置最后一次交互的时间，便于服务器回收长时间空转的client
     c->lastinteraction = server.unixtime;
+    // 用于在命令执行成功后(commandProcessed)更新reploff，以配合psync
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
     atomicIncr(server.stat_net_input_bytes, nread);
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {

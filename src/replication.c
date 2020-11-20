@@ -180,8 +180,8 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     if (server.repl_backlog_histlen > server.repl_backlog_size)
         server.repl_backlog_histlen = server.repl_backlog_size;
     /* Set the offset of the first byte we have in the backlog. */
-    // 如果没有出现覆盖，则该值为backlog开始的地方
-    // 如果出现覆盖，则该值该值向右偏移了被覆盖的长度
+    // 则该值为backlog开始的地方
+    // 如果出现覆盖，则实际上会有数据丢失的情况
     server.repl_backlog_off = server.master_repl_offset -
                               server.repl_backlog_histlen + 1;
 }
@@ -457,6 +457,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
      * split the reply in two parts if we are cross-boundary. */
     len = server.repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
+    // 分两次输出
     while(len) {
         long long thislen =
             ((server.repl_backlog_size - j) < len) ?
@@ -542,6 +543,8 @@ int masterTryPartialResynchronization(client *c) {
      *
      * Note that there are two potentially valid replication IDs: the ID1
      * and the ID2. The ID2 however is only valid up to a specific offset. */
+    // 1. master_replid不是当前节点的replid，说明可能会是replid2，需要走条件2
+    // 2. master_replid不是replid2 或 psync_offset大于之前做为从节点时的repl_offset；无论哪种都意味着无法进行psync
     if (strcasecmp(master_replid, server.replid) &&
         (strcasecmp(master_replid, server.replid2) ||
          psync_offset > server.second_replid_offset))
@@ -551,6 +554,7 @@ int masterTryPartialResynchronization(client *c) {
             if (strcasecmp(master_replid, server.replid) &&
                 strcasecmp(master_replid, server.replid2))
             {
+                // 如果master_replid与replid2不一致
                 serverLog(LL_NOTICE,"Partial resynchronization not accepted: "
                     "Replication ID mismatch (Replica asked for '%s', my "
                     "replication IDs are '%s' and '%s')",
@@ -568,6 +572,10 @@ int masterTryPartialResynchronization(client *c) {
     }
 
     /* We still have the data our slave is asking for? */
+    // 任意条件满足
+    // 1. backlog未初始化过——持有从节点数据为0
+    // 2. psync_offset 小于 backlog_off —— backoff中数据已不存在请求的数据
+    // 3. backlog中还未记录所请求数据
     if (!server.repl_backlog ||
         psync_offset < server.repl_backlog_off ||
         psync_offset > (server.repl_backlog_off + server.repl_backlog_histlen))
@@ -581,6 +589,10 @@ int masterTryPartialResynchronization(client *c) {
         goto need_full_resync;
     }
 
+    // 至此可知:
+    // 1. master_replid == server.replid 或 master_replid == server.replid2，这意味着当前节点与从节点早已建立连接，
+    //    可以进行增量同步
+    // 2. psync_offset合理
     /* If we reached this point, we are able to perform a partial resync:
      * 1) Set client state to make it a slave.
      * 2) Inform the client we can continue with +CONTINUE
@@ -602,6 +614,7 @@ int masterTryPartialResynchronization(client *c) {
         freeClientAsync(c);
         return C_OK;
     }
+    // 将增量部分的内容发送至从节点
     psync_len = addReplyReplicationBacklog(c,psync_offset);
     serverLog(LL_NOTICE,
         "Partial resynchronization request from %s accepted. Sending %lld bytes of backlog starting from offset %lld.",
@@ -1869,6 +1882,7 @@ void readSyncBulkPayload(connection *conn) {
      * accumulate the backlog regardless of the fact they have sub-slaves
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
+    // 即使没有子层从节点，也创建backlog，因为后续可能被选举为主节点
     if (server.repl_backlog == NULL) createReplicationBacklog();
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
@@ -1902,6 +1916,7 @@ error:
 #define SYNC_CMD_READ (1<<0)
 #define SYNC_CMD_WRITE (1<<1)
 #define SYNC_CMD_FULL (SYNC_CMD_READ|SYNC_CMD_WRITE)
+// 进行阻塞模式的读写操作
 char *sendSynchronousCommand(int flags, connection *conn, ...) {
 
     /* Create the command to send to the master, we use redis binary
@@ -2564,6 +2579,7 @@ void replicationSetMaster(char *ip, int port) {
     // 需要将masterhost置空，不然释放连接到master的client时，会重新尝试连接master
     server.masterhost = NULL;
     if (server.master) {
+        // 释放时，会将master的信息放到chached_master中
         freeClient(server.master);
     }
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
@@ -2633,6 +2649,8 @@ void replicationUnsetMaster(void) {
      * NOTE: this function MUST be called after we call
      * freeClient(server.master), since there we adjust the replication
      * offset trimming the final PINGs. See Github issue #7320. */
+    // 将当前replid和repl_offset移交给second，并当前节点使用新的replid
+    // 后续从节点发送psync命令时，将未同步的数据同步至从节点
     shiftReplicationId();
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
@@ -2907,6 +2925,7 @@ void replicationCacheMasterUsingMyself(void) {
     replicationCreateMasterClient(NULL,-1);
 
     /* Use our own ID / offset. */
+    // 当前节点是master，则master.replid就是server的replid
     memcpy(server.master->replid, server.replid, sizeof(server.replid));
 
     /* Set as cached master. */

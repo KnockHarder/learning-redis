@@ -1319,16 +1319,16 @@ struct redisServer {
     /* Replication (master) */
     char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
     char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
-    long long master_repl_offset;   /* My current replication offset */
-    long long second_replid_offset; /* Accept offsets up to this for replid2. */
+    long long master_repl_offset;   /* My current replication offset */ //已同步内容大小
+    long long second_replid_offset; /* Accept offsets up to this for replid2. */ //初始值为-1
     int slaveseldb;                 /* Last SELECTed DB in replication output */
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* Backlog circular buffer size */
     long long repl_backlog_histlen; /* Backlog actual data length */
-    long long repl_backlog_idx;     /* Backlog circular buffer current offset,
+    long long repl_backlog_idx;     /* Backlog circular buffer current offset, // 内容结束处，也是一次输入起始处
                                        that is the next byte will'll write to.*/
-    long long repl_backlog_off;     /* Replication "master offset" of first
+    long long repl_backlog_off;     /* Replication "master offset" of first //backlog有效数据的开始处
                                        byte in the replication backlog buffer.*/
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
@@ -1370,7 +1370,7 @@ struct redisServer {
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */
     char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
+    long long master_initial_offset;           /* Master PSYNC offset. */ //初始值为-1
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */ // 从主数据库同步数据时，替换旧数据库的策略
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */

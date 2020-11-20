@@ -2445,6 +2445,7 @@ void initServerConfig(void) {
     updateCachedTime(1);
     getRandomHexChars(server.runid,CONFIG_RUN_ID_SIZE);
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
+    // 初始化用于主从同步的replid
     changeReplicationId();
     clearReplicationId2();
     server.hz = CONFIG_DEFAULT_HZ; /* Initialize it ASAP, even if it may get
