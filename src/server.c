@@ -3804,6 +3804,7 @@ int processCommand(client *c) {
         is_write_command &&
         server.repl_good_slaves_count < server.repl_min_slaves_to_write)
     {
+        // 如果是写命令，且有效从节点数量小于阈值，说明主从连接有问题，拒绝写命令
         rejectCommand(c, shared.noreplicaserr);
         return C_OK;
     }

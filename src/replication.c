@@ -938,6 +938,7 @@ void replconfCommand(client *c) {
             if (!(c->flags & CLIENT_SLAVE)) return;
             if ((getLongLongFromObject(c->argv[j+1], &offset) != C_OK))
                 return;
+            // 更新ack_off与ack_time
             if (offset > c->repl_ack_off)
                 c->repl_ack_off = offset;
             c->repl_ack_time = server.unixtime;
@@ -3288,6 +3289,7 @@ void replicationCron(void) {
     /* Send ACK to master from time to time.
      * Note that we do not send periodic acks to masters that don't
      * support PSYNC and replication offsets. */
+    // 发送ack信息
     if (server.masterhost && server.master &&
         !(server.master->flags & CLIENT_PRE_PSYNC))
         replicationSendAck();
