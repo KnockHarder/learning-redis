@@ -2087,6 +2087,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
+    // 执行哨兵的定时任务
     if (server.sentinel_mode) sentinelTimer();
 
     /* Cleanup expired MIGRATE cached sockets. */
@@ -3134,6 +3135,7 @@ void InitServerLast() {
 /* Parse the flags string description 'strflags' and set them to the
  * command 'c'. If the flags are all valid C_OK is returned, otherwise
  * C_ERR is returned (yet the recognized flags are set in the command). */
+// 通过strflags初始化flags
 int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
     int argc;
     sds *argv;
@@ -5315,6 +5317,7 @@ int main(int argc, char **argv) {
     uint8_t hashseed[16];
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    // 当前服务器是否是哨兵模式
     server.sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
@@ -5345,6 +5348,7 @@ int main(int argc, char **argv) {
     else if (strstr(argv[0],"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 
+    // 解析、加载配置
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
         sds options = sdsempty();

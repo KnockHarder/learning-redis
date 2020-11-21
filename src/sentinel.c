@@ -473,6 +473,7 @@ struct redisCommand sentinelcmds[] = {
 /* This function overwrites a few normal Redis config default with Sentinel
  * specific defaults. */
 void initSentinelConfig(void) {
+    // 哨兵模式默认使用26379端口，可以通过配置文件修改
     server.port = REDIS_SENTINEL_PORT;
     server.protected_mode = 0; /* Sentinel must be exposed. */
 }
@@ -483,6 +484,7 @@ void initSentinel(void) {
 
     /* Remove usual Redis commands from the command table, then just add
      * the SENTINEL command. */
+    // 哨兵模式下的服务器，会使用另一套命令
     dictEmpty(server.commands,NULL);
     dictEmpty(server.orig_commands,NULL);
     ACLClearCommandID();
@@ -664,6 +666,7 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
         serverLog(level,"%s %s",type,msg);
 
     /* Publish the message via Pub/Sub if it's not a debugging one. */
+    // 将消息通过channel发送至已订阅的客户端
     if (level != LL_DEBUG) {
         channel = createStringObject(type,strlen(type));
         payload = createStringObject(msg,strlen(msg));
@@ -677,6 +680,7 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
         sentinelRedisInstance *master = (ri->flags & SRI_MASTER) ?
                                          ri : ri->master;
         if (master && master->notification_script) {
+            // 将notification脚本和参数加入sentinel.scripts_queue
             sentinelScheduleScriptExecution(master->notification_script,
                 type,msg,NULL);
         }
@@ -694,6 +698,8 @@ void sentinelGenerateInitialMonitorEvents(void) {
     di = dictGetIterator(sentinel.masters);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
+        // 通过channel(+monitor)发送消息，并将notification_scirpt加入执行脚本队列
+        // 此时刚启动，并没有客户端监听该消息
         sentinelEvent(LL_WARNING,"+monitor",ri,"%@ quorum %d",ri->quorum);
     }
     dictReleaseIterator(di);
@@ -1644,6 +1650,7 @@ char *sentinelHandleConfiguration(char **argv, int argc) {
         int quorum = atoi(argv[4]);
 
         if (quorum <= 0) return "Quorum must be 1 or greater.";
+        // 创建主节点，并加入 sentinel.masters
         if (createSentinelRedisInstance(argv[1],SRI_MASTER,argv[2],
                                         atoi(argv[3]),quorum,NULL) == NULL)
         {
