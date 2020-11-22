@@ -359,6 +359,7 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
     e->reading = e->writing = 0;
 
     /* Register functions to start/stop listening for events */
+    // 事件监听动作绑定
     ac->ev.addRead = redisAeAddRead;
     ac->ev.delRead = redisAeDelRead;
     ac->ev.addWrite = redisAeAddWrite;
@@ -2044,6 +2045,7 @@ void sentinelSendAuthIfNeeded(sentinelRedisInstance *ri, redisAsyncContext *c) {
         }
     }
 
+    // 添加认证命令至obuf
     if (auth_pass && auth_user == NULL) {
         if (redisAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s %s",
             sentinelInstanceMapCommand(ri,"AUTH"),
@@ -2103,6 +2105,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
     /* Commands connection. */
     if (link->cc == NULL) {
+        // 创建tcp连接
         link->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,NET_FIRST_BIND_ADDR);
         if (!link->cc->err && server.tls_replication &&
                 (instanceLinkNegotiateTLS(link->cc) == C_ERR)) {
@@ -2113,18 +2116,25 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
                 link->cc->errstr);
             instanceLinkCloseConnection(link,link->cc);
         } else {
+            // 更新连接状态和时间
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
+            // 将loop绑定到context上，以供后续添加文件事件至loop
             redisAeAttach(server.el,link->cc);
+            // 配置onconnect句柄，并添加写事件至主循环
             redisAsyncSetConnectCallback(link->cc,
                     sentinelLinkEstablishedCallback);
+            // 配置onDisconnect句柄
             redisAsyncSetDisconnectCallback(link->cc,
                     sentinelDisconnectCallback);
+            // 如果需要认证添加认证命令
             sentinelSendAuthIfNeeded(ri,link->cc);
+            // 将发送名称的命令添加到输出缓冲区
             sentinelSetClientName(ri,link->cc,"cmd");
 
             /* Send a PING ASAP when reconnecting. */
+			// 添加ping命令至缓冲区，如果之前的ping命令有返回，更新last_ping_time为当前时间
             sentinelSendPing(ri);
         }
     }
@@ -2151,6 +2161,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             sentinelSendAuthIfNeeded(ri,link->pc);
             sentinelSetClientName(ri,link->pc,"pubsub");
             /* Now we subscribe to the Sentinels "Hello" channel. */
+            // 将订阅hello channel的命令添加到缓冲区
             retval = redisAsyncCommand(link->pc,
                 sentinelReceiveHelloMessages, ri, "%s %s",
                 sentinelInstanceMapCommand(ri,"SUBSCRIBE"),
@@ -2744,6 +2755,7 @@ int sentinelForceHelloUpdateForMaster(sentinelRedisInstance *master) {
  *
  * On error zero is returned, and we can't consider the PING command
  * queued in the connection. */
+// 添加ping命令至缓冲区，如果之前的ping命令有返回，更新last_ping_time为当前时间
 int sentinelSendPing(sentinelRedisInstance *ri) {
     int retval = redisAsyncCommand(ri->link->cc,
         sentinelPingReplyCallback, ri, "%s",
@@ -4554,7 +4566,9 @@ void sentinelAbortFailover(sentinelRedisInstance *ri) {
 void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     /* ========== MONITORING HALF ============ */
     /* Every kind of instance */
+    // 重新连接，如将写事件添加到el中
     sentinelReconnectInstance(ri);
+    // 如果满足时间间隔，添加ping命令、添加publish命令(节点信息)至缓冲区
     sentinelSendPeriodicCommands(ri);
 
     /* ============== ACTING HALF ============= */
@@ -4568,6 +4582,7 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     }
 
     /* Every kind of instance */
+    // 检查是否有不健康连接需要关闭，当前实例是否需要关闭
     sentinelCheckSubjectivelyDown(ri);
 
     /* Masters and slaves */
@@ -4577,8 +4592,11 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
 
     /* Only masters */
     if (ri->flags & SRI_MASTER) {
+        // 是否需要更换master
         sentinelCheckObjectivelyDown(ri);
+        // 如果需要更换master，要求master进入failover状态
         if (sentinelStartFailoverIfNeeded(ri))
+            // 通知其他哨兵master准备更换
             sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);
         sentinelFailoverStateMachine(ri);
         sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_NO_FLAGS);
@@ -4643,8 +4661,11 @@ void sentinelCheckTiltCondition(void) {
 }
 
 void sentinelTimer(void) {
+    // 检查是否打开tilt状态
     sentinelCheckTiltCondition();
+    // 核心操作
     sentinelHandleDictOfRedisInstances(sentinel.masters);
+    // 脚本相关
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
     sentinelKillTimedoutScripts();
