@@ -564,6 +564,7 @@ void redisProcessCallbacks(redisAsyncContext *ac) {
             }
             /* No more regular callbacks and no errors, the context *must* be subscribed or monitoring. */
             assert((c->flags & REDIS_SUBSCRIBED || c->flags & REDIS_MONITORING));
+            // 回复内容属于pub/sub
             if(c->flags & REDIS_SUBSCRIBED)
                 __redisGetSubscribeCallback(ac,reply,&cb);
         }

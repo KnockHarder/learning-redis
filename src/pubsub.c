@@ -168,6 +168,7 @@ int pubsubSubscribeChannel(client *c, robj *channel) {
         listAddNodeTail(clients,c);
     }
     /* Notify the client */
+    // 返回subscribe成功通知
     addReplyPubsubSubscribed(c,channel);
     return retval;
 }

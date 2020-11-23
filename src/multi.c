@@ -95,6 +95,7 @@ void flagTransaction(client *c) {
 }
 
 void multiCommand(client *c) {
+    // 开启multi状态
     if (c->flags & CLIENT_MULTI) {
         addReplyError(c,"MULTI calls can not be nested");
         return;
