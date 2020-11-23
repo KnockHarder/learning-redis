@@ -627,10 +627,12 @@ static int __redisAsyncHandleConnect(redisAsyncContext *ac) {
 void redisAsyncRead(redisAsyncContext *ac) {
     redisContext *c = &(ac->c);
 
+    // 做一次读取，单次读取长度不超过16kb
     if (redisBufferRead(c) == REDIS_ERR) {
         __redisAsyncDisconnect(ac);
     } else {
         /* Always re-schedule reads */
+        // 读完后会继续添加读动作，并添加处理读取到的内容
         _EL_ADD_READ(ac);
         redisProcessCallbacks(ac);
     }
@@ -668,6 +670,7 @@ void redisAsyncWrite(redisAsyncContext *ac) {
             _EL_DEL_WRITE(ac);
 
         /* Always schedule reads after writes */
+        // 写完后会添加读事件
         _EL_ADD_READ(ac);
     }
 }

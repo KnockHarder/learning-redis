@@ -695,6 +695,7 @@ static redisContext *redisContextInit(void) {
     if (c == NULL)
         return NULL;
 
+    // 读写动作句柄
     c->funcs = &redisContextDefaultFuncs;
 
     c->obuf = hi_sdsempty();
@@ -939,6 +940,7 @@ int redisBufferRead(redisContext *c) {
 
     nread = c->funcs->read(c, buf, sizeof(buf));
     if (nread > 0) {
+        // 读取的内容片段会放置在reader中
         if (redisReaderFeed(c->reader, buf, nread) != REDIS_OK) {
             __redisSetError(c, c->reader->err, c->reader->errstr);
             return REDIS_ERR;

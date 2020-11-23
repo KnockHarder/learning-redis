@@ -3839,6 +3839,7 @@ int processCommand(client *c) {
     /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
      * when slave-serve-stale-data is no and we are a slave with a broken
      * link with master. */
+    // 主服务器下线
     if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED &&
         server.repl_serve_stale_data == 0 &&
         is_denystale_command)
@@ -3849,6 +3850,7 @@ int processCommand(client *c) {
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
+    // 数据库正在加载中
     if (server.loading && is_denyloading_command) {
         rejectCommand(c, shared.loadingerr);
         return C_OK;

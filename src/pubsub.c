@@ -364,6 +364,7 @@ void subscribeCommand(client *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
+    // 将客户端置为pubsub类型
     c->flags |= CLIENT_PUBSUB;
 }
 
