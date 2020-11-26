@@ -487,10 +487,12 @@ void clusterInit(void) {
     if (clusterLoadConfig(server.cluster_configfile) == C_ERR) {
         /* No configuration found. We will just use the random name provided
          * by the createClusterNode() function. */
+        // 初始化节点
         myself = server.cluster->myself =
             createClusterNode(NULL,CLUSTER_NODE_MYSELF|CLUSTER_NODE_MASTER);
         serverLog(LL_NOTICE,"No cluster configuration found, I'm %.40s",
             myself->name);
+        // 加入当前集群
         clusterAddNode(myself);
         saveconf = 1;
     }
@@ -511,13 +513,14 @@ void clusterInit(void) {
                    "lower than 55535.");
         exit(1);
     }
+    // 集群端口会在服务器端口的基础上偏移10000
     if (listenToPort(port+CLUSTER_PORT_INCR,
         server.cfd,&server.cfd_count) == C_ERR)
     {
         exit(1);
     } else {
         int j;
-
+        // 监听集群相关消息，并添加初始化连接事件
         for (j = 0; j < server.cfd_count; j++) {
             if (aeCreateFileEvent(server.el, server.cfd[j], AE_READABLE,
                 clusterAcceptHandler, NULL) == AE_ERR)
@@ -1291,6 +1294,7 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
      * We do that even if this node is a replica and not a master: anyway
      * the failing state is triggered collecting failure reports from masters,
      * so here the replica is only helping propagating this status. */
+    // 传播该节点进入fail状态的消息，并添加相关处理动作
     clusterSendFail(node->name);
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
 }
@@ -1441,6 +1445,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             /* We already know this node.
                Handle failure reports, only when the sender is a master. */
             if (sender && nodeIsMaster(sender) && node != myself) {
+                // 节点被sender认定其下线，需要记录异常报告，并当超过一半节点均认定其异常后，进行failover状态
                 if (flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
@@ -1449,6 +1454,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                     }
                     markNodeAsFailingIfNeeded(node);
                 } else {
+                    // 该节点正常，删除发送方对其fail的报告
                     if (clusterNodeDelFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
                             "Node %.40s reported node %.40s is back online.",
@@ -1461,6 +1467,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * we have no pending ping for the node, nor we have failure
              * reports for this node, update the last pong time with the
              * one we see from the other nodes. */
+            // 更新pong_received
             if (!(flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) &&
                 node->ping_sent == 0 &&
                 clusterNodeFailureReportsCount(node) == 0)
@@ -1484,6 +1491,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * can talk with this other node, update the address, disconnect
              * the old link if any, so that we'll attempt to connect with the
              * new address. */
+            // 如果节点被标记为下线，但从消息中得知节点仍在线且地址变化，则更新地址重新连接
             if (node->flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL) &&
                 !(flags & CLUSTER_NODE_NOADDR) &&
                 !(flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) &&
@@ -1507,6 +1515,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * Note that we require that the sender of this gossip message
              * is a well known node in our cluster, otherwise we risk
              * joining another cluster. */
+            // 添加新节点
             if (sender &&
                 !(flags & CLUSTER_NODE_NOADDR) &&
                 !clusterBlacklistExists(g->nodename))
@@ -1743,6 +1752,7 @@ int clusterProcessPacket(clusterLink *link) {
     uint64_t senderCurrentEpoch = 0, senderConfigEpoch = 0;
     clusterNode *sender;
 
+    // 校验信息长度
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG ||
         type == CLUSTERMSG_TYPE_MEET)
     {
@@ -1796,6 +1806,7 @@ int clusterProcessPacket(clusterLink *link) {
      * because of Pub/Sub. */
     if (sender) sender->data_received = now;
 
+	// 节点epoch及repl_offset信息更新，如果出现failover添加相应处理动作
     if (sender && !nodeInHandshake(sender)) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */
         senderCurrentEpoch = ntohu64(hdr->currentEpoch);
@@ -1813,6 +1824,9 @@ int clusterProcessPacket(clusterLink *link) {
         sender->repl_offset_time = now;
         /* If we are a slave performing a manual failover and our master
          * sent its offset while already paused, populate the MF state. */
+        // 1.当前节点为从节点，且消息来源于主节点
+        // 2.主节点由于手动failover而暂停服务
+        // 3. mf_master_offset为0
         if (server.cluster->mf_end &&
             nodeIsSlave(myself) &&
             myself->slaveof == sender &&
@@ -1820,6 +1834,7 @@ int clusterProcessPacket(clusterLink *link) {
             server.cluster->mf_master_offset == 0)
         {
             server.cluster->mf_master_offset = sender->repl_offset;
+            // 添加待处理事件
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
             serverLog(LL_WARNING,
                 "Received replication offset for paused "
@@ -1829,6 +1844,9 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     /* Initial processing of PING and MEET requests replying with a PONG. */
+    // 1.如果是meet消息或本机ip未设置，更新本机ip信息
+    // 2.如果是meet请求，且sender不存在，则添加节点，将其状态设置为handshake；并处理gossipSection
+    // 3.发送pong信息，携带gossipSection
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
         serverLog(LL_DEBUG,"Ping packet received: %p", (void*)link->node);
 
@@ -1843,6 +1861,7 @@ int clusterProcessPacket(clusterLink *link) {
          * However if we don't have an address at all, we update the address
          * even with a normal PING packet. If it's wrong it will be fixed
          * by MEET later. */
+        // 更新本机ip地址
         if ((type == CLUSTERMSG_TYPE_MEET || myself->ip[0] == '\0') &&
             server.cluster_announce_ip == NULL)
         {
@@ -1862,9 +1881,10 @@ int clusterProcessPacket(clusterLink *link) {
          * In this stage we don't try to add the node with the right
          * flags, slaveof pointer, and so forth, as this details will be
          * resolved when we'll receive PONGs from the node. */
+        // type=meet时添加新节点，此时节点的name为null
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
-
+            // 这里没有记录节点名称
             node = createClusterNode(NULL,CLUSTER_NODE_HANDSHAKE);
             nodeIp2String(node->ip,link,hdr->myip);
             node->port = ntohs(hdr->port);
@@ -1876,6 +1896,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* If this is a MEET packet from an unknown node, we still process
          * the gossip section here since we have to trust the sender because
          * of the message type. */
+        // type=meet时处理gossipSection
         if (!sender && type == CLUSTERMSG_TYPE_MEET)
             clusterProcessGossipSection(hdr,link);
 
@@ -1890,10 +1911,13 @@ int clusterProcessPacket(clusterLink *link) {
         serverLog(LL_DEBUG,"%s packet received: %p",
             type == CLUSTERMSG_TYPE_PING ? "ping" : "pong",
             (void*)link->node);
+        // 比对link.node与sender/hdr.sender的信息，如果不一致，需要进行重连；如果link.node在握手中状态，那么将结束握手并更新身份(slave/master)
         if (link->node) {
             if (nodeInHandshake(link->node)) {
                 /* If we already have this node, try to change the
                  * IP/port of the node with the new one. */
+				// 如果sender已在记录中，但link.node为handshake状态，且说明ip端口发生变化，需要重新连接，则将link.node释放，更新sender的信息等其重新连接
+                // 这说明一般情况下，link.node的状态应该在握手后，如果在握手中，那么server.cluster中不应登记
                 if (sender) {
                     serverLog(LL_VERBOSE,
                         "Handshake: we already know node %.40s, "
@@ -1911,6 +1935,7 @@ int clusterProcessPacket(clusterLink *link) {
 
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
+                // 握手完毕，更新信息
                 clusterRenameNode(link->node, hdr->sender);
                 serverLog(LL_DEBUG,"Handshake with node %.40s completed.",
                     link->node->name);
@@ -1943,6 +1968,7 @@ int clusterProcessPacket(clusterLink *link) {
          * be propagated because the slave ranking used to understand the
          * delay of each slave in the voting process, needs to know
          * what are the instances really competing. */
+        // 更新nofailover标记
         if (sender) {
             int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
             sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
@@ -1959,8 +1985,10 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         /* Update our info about the node */
+        // 清理无效的pfail/fail标志
         if (link->node && type == CLUSTERMSG_TYPE_PONG) {
-            link->node->pong_received = now;
+            link->node->pong_received = now; 
+            // 重置 ping_sent
             link->node->ping_sent = 0;
 
             /* The PFAIL condition can be reversed without external
@@ -1979,6 +2007,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         /* Check for role switch: slave -> master or master -> slave. */
+        // 检查是不有master,slave身份的切换，身份是slave未变但切换了master
         if (sender) {
             if (!memcmp(hdr->slaveof,CLUSTER_NODE_NULL_NAME,
                 sizeof(hdr->slaveof)))
@@ -1988,7 +2017,7 @@ int clusterProcessPacket(clusterLink *link) {
             } else {
                 /* Node is a slave. */
                 clusterNode *master = clusterLookupNode(hdr->slaveof);
-
+                // master -> slave
                 if (nodeIsMaster(sender)) {
                     /* Master turned into a slave! Reconfigure the node. */
                     clusterDelNodeSlots(sender);
@@ -2002,6 +2031,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* Master node changed for this slave? */
+                // 原本就是slave但是master已切换
                 if (master && sender->slaveof != master) {
                     if (sender->slaveof)
                         clusterNodeRemoveSlave(sender->slaveof,sender);
@@ -2265,6 +2295,7 @@ void clusterLinkConnectHandler(connection *conn) {
     mstime_t old_ping_sent = node->ping_sent;
     clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ?
             CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
+    // 初次连接的ping/meet消息不更新ping时间
     if (old_ping_sent) {
         /* If there was an active ping before the link was
          * disconnected, we want to restore the ping time, otherwise
@@ -2330,6 +2361,7 @@ void clusterReadHandler(connection *conn) {
         } else {
             /* Read data and recast the pointer to the new buffer. */
             size_t unused = link->rcvbuf_alloc - link->rcvbuf_len;
+            // 扩容，翻倍或加1M
             if ((size_t)nread > unused) {
                 size_t required = link->rcvbuf_len + nread;
                 /* If less than 1mb, grow to twice the needed size, if larger grow by 1mb. */
@@ -2343,6 +2375,7 @@ void clusterReadHandler(connection *conn) {
         }
 
         /* Total length obtained? Process this packet. */
+        // 消息读取完成
         if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
@@ -2363,6 +2396,7 @@ void clusterReadHandler(connection *conn) {
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
+    // 添加写事件
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
 
@@ -2567,6 +2601,7 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* Populate the gossip fields */
     int maxiterations = wanted*3;
+    // 随机传递部分集群节点的信息
     while(freshnodes > 0 && gossipcount < wanted && maxiterations--) {
         dictEntry *de = dictGetRandomKey(server.cluster->nodes);
         clusterNode *this = dictGetVal(de);
@@ -2600,6 +2635,7 @@ void clusterSendPing(clusterLink *link, int type) {
     }
 
     /* If there are PFAIL nodes, add them at the end. */
+    // 追加处于pfail状态节点的信息
     if (pfail_wanted) {
         dictIterator *di;
         dictEntry *de;
@@ -2724,6 +2760,7 @@ void clusterSendFail(char *nodename) {
 
     clusterBuildMessageHdr(hdr,CLUSTERMSG_TYPE_FAIL);
     memcpy(hdr->data.fail.about.nodename,nodename,CLUSTER_NAMELEN);
+    // 向server.clusters各节点（除自己）传播fail状态
     clusterBroadcastMessage(buf,ntohl(hdr->totlen));
 }
 
@@ -3484,6 +3521,7 @@ void clusterCron(void) {
     /* We want to take myself->ip in sync with the cluster-announce-ip option.
      * The option can be set at runtime via CONFIG SET, so we periodically check
      * if the option changed to reflect this into myself->ip. */
+	// 更新ip
     {
         static char *prev_ip = NULL;
         char *curr_ip = server.cluster_announce_ip;
@@ -3537,11 +3575,13 @@ void clusterCron(void) {
 
         /* A Node in HANDSHAKE state has a limited lifespan equal to the
          * configured node timeout. */
+        // 删除超时的节点
         if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
             clusterDelNode(node);
             continue;
         }
 
+        // 为未建立连接的节点建立连接
         if (node->link == NULL) {
             clusterLink *link = createClusterLink(node);
             link->conn = server.tls_cluster ? connCreateTLS() : connCreateSocket();
@@ -3568,6 +3608,7 @@ void clusterCron(void) {
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
+    // 每10个循环运行一次，随机选取5个有效节点，取最小 pong_received 节点发送 ping 消息
     if (!(iteration % 10)) {
         int j;
 
@@ -3602,6 +3643,7 @@ void clusterCron(void) {
     max_slaves = 0;
     this_slaves = 0;
     di = dictGetSafeIterator(server.cluster->nodes);
+    // 健康检测
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         now = mstime(); /* Use an updated time at every iteration. */
@@ -3631,11 +3673,11 @@ void clusterCron(void) {
         /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
          * issue even if the node is alive. */
+        // 断开过期的连接
         mstime_t ping_delay = now - node->ping_sent;
         mstime_t data_delay = now - node->data_received;
         if (node->link && /* is connected */
-            now - node->link->ctime >
-            server.cluster_node_timeout && /* was not already reconnected */
+            now - node->link->ctime > server.cluster_node_timeout && /* was not already reconnected */
             node->ping_sent && /* we already sent a ping */
             node->pong_received < node->ping_sent && /* still waiting pong */
             /* and we are waiting for the pong more than timeout/2 */
@@ -3651,6 +3693,7 @@ void clusterCron(void) {
          * received PONG is older than half the cluster timeout, send
          * a new ping now, to ensure all the nodes are pinged without
          * a too big delay. */
+        // 维持心跳
         if (node->link &&
             node->ping_sent == 0 &&
             (now - node->pong_received) > server.cluster_node_timeout/2)
@@ -3684,6 +3727,7 @@ void clusterCron(void) {
         mstime_t node_delay = (ping_delay < data_delay) ? ping_delay :
                                                           data_delay;
 
+        // 连接超时/pong消息回复超时，进入 pfail 状态
         if (node_delay > server.cluster_node_timeout) {
             /* Timeout reached. Set the node as possibly failing if it is
              * not already in this state. */
@@ -3700,6 +3744,7 @@ void clusterCron(void) {
     /* If we are a slave node but the replication is still turned off,
      * enable it if we know the address of our master and it appears to
      * be up. */
+    // 集群要求当前节点更换master
     if (nodeIsSlave(myself) &&
         server.masterhost == NULL &&
         myself->slaveof &&
@@ -3709,6 +3754,7 @@ void clusterCron(void) {
     }
 
     /* Abort a manual failover if the timeout is reached. */
+    // mf超时，则恢复正常
     manualFailoverCheckTimeout();
 
     if (nodeIsSlave(myself)) {
@@ -3725,7 +3771,7 @@ void clusterCron(void) {
     }
 
     if (update_state || server.cluster->state == CLUSTER_FAIL)
-        clusterUpdateState();
+        clusterUpdateState(); // 更新集群状态
 }
 
 /* This function is called before the event handler returns to sleep for
@@ -3907,7 +3953,7 @@ void clusterCloseAllSlots(void) {
 #define CLUSTER_MAX_REJOIN_DELAY 5000
 #define CLUSTER_MIN_REJOIN_DELAY 500
 #define CLUSTER_WRITABLE_DELAY 2000
-
+// 更新集群状态 上线/下线
 void clusterUpdateState(void) {
     int j, new_state;
     int reachable_masters = 0;
@@ -3932,6 +3978,7 @@ void clusterUpdateState(void) {
     new_state = CLUSTER_OK;
 
     /* Check if all the slots are covered. */
+    // 任一节点下线，整个群集下线
     if (server.cluster_require_full_coverage) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->slots[j] == NULL ||
@@ -3948,6 +3995,7 @@ void clusterUpdateState(void) {
      *
      * At the same time count the number of reachable masters having
      * at least one slot. */
+    // 更新有效节点数量
     {
         dictIterator *di;
         dictEntry *de;
@@ -3968,6 +4016,7 @@ void clusterUpdateState(void) {
 
     /* If we are in a minority partition, change the cluster state
      * to FAIL. */
+    // 仅有不超过一半的有效节点在线时，集群下线
     {
         int needed_quorum = (server.cluster->size / 2) + 1;
 
