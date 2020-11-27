@@ -1296,7 +1296,7 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
      * We do that even if this node is a replica and not a master: anyway
      * the failing state is triggered collecting failure reports from masters,
      * so here the replica is only helping propagating this status. */
-    // 传播该节点进入fail状态的消息，并添加相关处理动作
+    // 传播该节点进入fail状态的消息
     clusterSendFail(node->name);
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
 }
@@ -1446,8 +1446,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         if (node) {
             /* We already know this node.
                Handle failure reports, only when the sender is a master. */
+			// 节点被sender认定其下线，需要记录异常报告，并当超过一半节点均认定其异常后，进行failover状态
             if (sender && nodeIsMaster(sender) && node != myself) {
-                // 节点被sender认定其下线，需要记录异常报告，并当超过一半节点均认定其异常后，进行failover状态
                 if (flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
@@ -1469,7 +1469,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * we have no pending ping for the node, nor we have failure
              * reports for this node, update the last pong time with the
              * one we see from the other nodes. */
-            // 更新pong_received
+            // 如果节点健康，更新pong_received
             if (!(flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) &&
                 node->ping_sent == 0 &&
                 clusterNodeFailureReportsCount(node) == 0)
@@ -1668,7 +1668,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             {
                 /* Was this slot mine, and still contains keys? Mark it as
                  * a dirty slot. */
-                // 如果该分片当前由我负责，且里面仍有key未处理，将其记录为dirty slot
+                // 如果该分片当前由我负责，且里面存储有有键值对，将其记录为dirty slot
                 if (server.cluster->slots[j] == myself &&
                     countKeysInSlot(j) &&
                     sender != myself)
@@ -1701,7 +1701,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      *    master.
      * 2) We are a slave and our master is left without slots. We need
      *    to replicate to the new slots owner. */
-    // 如果当前节点的主节点均已迁移至新节点，则将该节点置为新节点设为当前节点的master
+    // 如果当前节点的主节点中的所有分片均已迁移至新节点，则将该节点置为新节点设为当前节点的master
     if (newmaster && curmaster->numslots == 0) {
         serverLog(LL_WARNING,
             "Configuration change detected. Reconfiguring myself "
@@ -1719,7 +1719,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
          * In order to maintain a consistent state between keys and slots
          * we need to remove all the keys from the slots we lost. */
         // 清理数据库中的key，从这里可以看出来，如果直接通过ADDSLOTS的方式重新分片，数据将丢失
-        // 正确的重新分析方式是使用 redis-trib 中的重新分片命令
+        // 正确的重新分片方式是使用 setslot 和 getkeysinslot 进行分片的迁入与迁出
         for (j = 0; j < dirty_slots_count; j++)
             delKeysInSlot(dirty_slots[j]);
     }
@@ -2062,6 +2062,7 @@ int clusterProcessPacket(clusterLink *link) {
         clusterNode *sender_master = NULL; /* Sender or its master if slave. */
         int dirty_slots = 0; /* Sender claimed slots don't match my view? */
 
+        // 检查是否有分片变动
         if (sender) {
             sender_master = nodeIsMaster(sender) ? sender : sender->slaveof;
             if (sender_master) {
@@ -2073,7 +2074,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* 1) If the sender of the message is a master, and we detected that
          *    the set of slots it claims changed, scan the slots to see if we
          *    need to update our configuration. */
-        // 分片可能被重新指定，需要更新分片信息
+        // 分片信息需要更新
         if (sender && nodeIsMaster(sender) && dirty_slots)
             clusterUpdateSlotsConfigWith(sender,senderConfigEpoch,hdr->myslots);
 
@@ -2137,7 +2138,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender) clusterProcessGossipSection(hdr,link);
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
-
+        // 有节点下线
         if (sender) {
             failing = clusterLookupNode(hdr->data.fail.about.nodename);
             if (failing &&
@@ -3573,6 +3574,7 @@ void clusterCron(void) {
      * better decisions in other part of the code. */
     di = dictGetSafeIterator(server.cluster->nodes);
     server.cluster->stats_pfail_nodes = 0;
+    // 握手处理
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
@@ -3585,7 +3587,7 @@ void clusterCron(void) {
 
         /* A Node in HANDSHAKE state has a limited lifespan equal to the
          * configured node timeout. */
-        // 删除超时的节点
+        // 删除握手超时的节点
         if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
             clusterDelNode(node);
             continue;
@@ -3664,6 +3666,7 @@ void clusterCron(void) {
 
         /* Orphaned master check, useful only if the current instance
          * is a slave that may migrate to another master. */
+        // 统计当前主节点的可用从节点数量、孤儿且分片正在迁出中的主节点数量、单个主节点的最大从节点数
         if (nodeIsSlave(myself) && nodeIsMaster(node) && !nodeFailed(node)) {
             int okslaves = clusterCountNonFailingSlaves(node);
 
@@ -3703,7 +3706,7 @@ void clusterCron(void) {
          * received PONG is older than half the cluster timeout, send
          * a new ping now, to ensure all the nodes are pinged without
          * a too big delay. */
-        // 维持心跳
+        // 向可用节点发送ping消息维持心跳
         if (node->link &&
             node->ping_sent == 0 &&
             (now - node->pong_received) > server.cluster_node_timeout/2)
@@ -4006,7 +4009,7 @@ void clusterUpdateState(void) {
      *
      * At the same time count the number of reachable masters having
      * at least one slot. */
-    // 更新有效节点数量
+    // 统计有分片的主节点（下文称为“有效节点”）数量
     {
         dictIterator *di;
         dictEntry *de;
@@ -4555,6 +4558,7 @@ NULL
         if ((slot = getSlotOrReply(c,c->argv[2])) == -1) return;
 
         if (!strcasecmp(c->argv[3]->ptr,"migrating") && c->argc == 5) {
+            // 将本节占的分片迁移至其他节点
             if (server.cluster->slots[slot] != myself) {
                 addReplyErrorFormat(c,"I'm not the owner of hash slot %u",slot);
                 return;
@@ -4566,6 +4570,7 @@ NULL
             }
             server.cluster->migrating_slots_to[slot] = n;
         } else if (!strcasecmp(c->argv[3]->ptr,"importing") && c->argc == 5) {
+            // 将其他节点的分片迁移至本节点
             if (server.cluster->slots[slot] == myself) {
                 addReplyErrorFormat(c,
                     "I'm already the owner of hash slot %u",slot);
@@ -5355,8 +5360,8 @@ void migrateCommand(client *c) {
      * the caller there was nothing to migrate. We don't return an error in
      * this case, since often this is due to a normal condition like the key
      * expiring in the meantime. */
-    ov = zrealloc(ov,sizeof(robj*)*num_keys);
-    kv = zrealloc(kv,sizeof(robj*)*num_keys);
+    ov = zrealloc(ov,sizeof(robj*)*num_keys); // object
+    kv = zrealloc(kv,sizeof(robj*)*num_keys); //key
     int oi = 0;
 
     for (j = 0; j < num_keys; j++) {
