@@ -755,6 +755,7 @@ unsigned int keyHashSlot(char *key, int keylen) {
 
     /* If we are here there is both a { and a } on its right. Hash
      * what is in the middle between { and }. */
+    // 使用第一对花括号中的内容进行哈希
     return crc16(key+s+1,e-s-1) & 0x3FFF;
 }
 
@@ -906,6 +907,7 @@ int clusterNodeRemoveSlave(clusterNode *master, clusterNode *slave) {
                         (sizeof(*master->slaves) * remaining_slaves));
             }
             master->numslaves--;
+            // 节点某个主节点的从节点数量降为0，去掉其可迁移的标记
             if (master->numslaves == 0)
                 master->flags &= ~CLUSTER_NODE_MIGRATE_TO;
             return C_OK;
@@ -1666,6 +1668,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             {
                 /* Was this slot mine, and still contains keys? Mark it as
                  * a dirty slot. */
+                // 如果该分片当前由我负责，且里面仍有key未处理，将其记录为dirty slot
                 if (server.cluster->slots[j] == myself &&
                     countKeysInSlot(j) &&
                     sender != myself)
@@ -1698,6 +1701,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      *    master.
      * 2) We are a slave and our master is left without slots. We need
      *    to replicate to the new slots owner. */
+    // 如果当前节点的主节点均已迁移至新节点，则将该节点置为新节点设为当前节点的master
     if (newmaster && curmaster->numslots == 0) {
         serverLog(LL_WARNING,
             "Configuration change detected. Reconfiguring myself "
@@ -1714,6 +1718,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
          *
          * In order to maintain a consistent state between keys and slots
          * we need to remove all the keys from the slots we lost. */
+        // 清理数据库中的key，从这里可以看出来，如果直接通过ADDSLOTS的方式重新分片，数据将丢失
+        // 正确的重新分析方式是使用 redis-trib 中的重新分片命令
         for (j = 0; j < dirty_slots_count; j++)
             delKeysInSlot(dirty_slots[j]);
     }
@@ -2067,6 +2073,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* 1) If the sender of the message is a master, and we detected that
          *    the set of slots it claims changed, scan the slots to see if we
          *    need to update our configuration. */
+        // 分片可能被重新指定，需要更新分片信息
         if (sender && nodeIsMaster(sender) && dirty_slots)
             clusterUpdateSlotsConfigWith(sender,senderConfigEpoch,hdr->myslots);
 
@@ -2091,6 +2098,8 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender && dirty_slots) {
             int j;
 
+            // 如果发送方的configEpoch比某些dirtySlot中的configEpoch低，需要告诉发送方其分片信息过时，发送需要更新的节点的slots信息
+            // 需要注意的是，这里只发送一个冲突的节点
             for (j = 0; j < CLUSTER_SLOTS; j++) {
                 if (bitmapTestBit(hdr->myslots,j)) {
                     if (server.cluster->slots[j] == sender ||
@@ -2116,6 +2125,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* If our config epoch collides with the sender's try to fix
          * the problem. */
+        // 纪元出现冲突，
         if (sender &&
             nodeIsMaster(myself) && nodeIsMaster(sender) &&
             senderConfigEpoch == myself->configEpoch)
@@ -3877,6 +3887,7 @@ int clusterNodeSetSlotBit(clusterNode *n, int slot) {
          * migration targets if the rest of the cluster is not a slave-less.
          *
          * See https://github.com/antirez/redis/issues/3043 for more info. */
+        // 如果该主节点已有负责的slot，且集群中存在从节点，那么将其标记为供其他slave迁移的对象
         if (n->numslots == 1 && clusterMastersHaveSlaves())
             n->flags |= CLUSTER_NODE_MIGRATE_TO;
     }
