@@ -249,6 +249,7 @@ void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, in
     }
     incrRefCount(val);
     if (!keepttl) removeExpire(db,key);
+    // 将所有watch该key的客户端标记为 dirty_cas
     if (signal) signalModifiedKey(c,db,key);
 }
 

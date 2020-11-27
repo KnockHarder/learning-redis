@@ -3889,6 +3889,7 @@ int processCommand(client *c) {
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)
     {
         // 将命令加入队列中，并不执行
+        // select不会立即执行，由于watch命令仅生效于事务期间，因此watch命令只能监听事务开始时所使用的数据库
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {

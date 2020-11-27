@@ -162,6 +162,7 @@ void execCommand(client *c) {
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
+    // 运行前原子性问题、命令无法正常运行问题会直接中断整个事务
     if (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC)) {
         addReply(c, c->flags & CLIENT_DIRTY_EXEC ? shared.execaborterr :
                                                    shared.nullarray[c->resp]);
@@ -170,6 +171,7 @@ void execCommand(client *c) {
     }
 
     /* Exec all the queued commands */
+    // redis是单线程处理的，进入到该客户端的处理逻辑后不再需要watch
     unwatchAllKeys(c); /* Unwatch ASAP otherwise we'll waste CPU cycles */
     orig_argv = c->argv;
     orig_argc = c->argc;
@@ -194,7 +196,7 @@ void execCommand(client *c) {
         }
 
         int acl_keypos;
-        int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
+        int acl_retval = ACLCheckCommandPerm(c,&acl_keypos); // 校验权限
         if (acl_retval != ACL_OK) {
             addACLLogEntry(c,acl_retval,acl_keypos,NULL);
             addReplyErrorFormat(c,
@@ -206,6 +208,7 @@ void execCommand(client *c) {
                 "no permission to execute the command or subcommand" :
                 "no permission to touch the specified keys");
         } else {
+            // 未做运行时的错误处理，意味着运行时的错误不会中断运行
             call(c,server.loading ? CMD_CALL_NONE : CMD_CALL_FULL);
         }
 
@@ -370,7 +373,7 @@ void touchWatchedKeysOnFlush(int dbid) {
 
 void watchCommand(client *c) {
     int j;
-
+    // watch命令必须在开启了事务才有效
     if (c->flags & CLIENT_MULTI) {
         addReplyError(c,"WATCH inside MULTI is not allowed");
         return;
