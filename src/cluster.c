@@ -1702,6 +1702,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * 2) We are a slave and our master is left without slots. We need
      *    to replicate to the new slots owner. */
     // 如果当前节点的主节点中的所有分片均已迁移至新节点，则将该节点置为新节点设为当前节点的master
+    // 如果当前节点为下线主节点，现在恢复过来时会出现这种情况，其分片信息较旧会被发送节点（发送节点为新的主节点）都替换掉，需要将其设为发送节点的从节点
     if (newmaster && curmaster->numslots == 0) {
         serverLog(LL_WARNING,
             "Configuration change detected. Reconfiguring myself "
@@ -1903,6 +1904,7 @@ int clusterProcessPacket(clusterLink *link) {
          * the gossip section here since we have to trust the sender because
          * of the message type. */
         // type=meet时处理gossipSection
+        // 后文中会对有sender的情况处理 gossip，因此有没有sender，ping/pong/meet命令都会处理 gossip 信息
         if (!sender && type == CLUSTERMSG_TYPE_MEET)
             clusterProcessGossipSection(hdr,link);
 
@@ -2189,6 +2191,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (nodeIsMaster(sender) && sender->numslots > 0 &&
             senderCurrentEpoch >= server.cluster->failover_auth_epoch)
         {
+            // 更新投票数
             server.cluster->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
@@ -2909,6 +2912,7 @@ void clusterSendMFStart(clusterNode *node) {
 }
 
 /* Vote for the node asking for our vote if there are the conditions. */
+// 在 clusterProcessPacket 已经更新过 epoch 了，所有此时了 epoch 只会大于等于 request 的 epoch
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     clusterNode *master = node->slaveof;
     uint64_t requestCurrentEpoch = ntohu64(request->currentEpoch);
@@ -2937,6 +2941,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     }
 
     /* I already voted for this epoch? Return ASAP. */
+    // 已经投过票了
     if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
         serverLog(LL_WARNING,
                 "Failover auth denied to %.40s: already voted for epoch %llu",
@@ -2984,6 +2989,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     /* The slave requesting the vote must have a configEpoch for the claimed
      * slots that is >= the one of the masters currently serving the same
      * slots in the current configuration. */
+    // 如果发送方存储的master节点的分片信息配置落后，则拒绝投票
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(claimed_slots, j) == 0) continue;
         if (server.cluster->slots[j] == NULL ||
@@ -3004,6 +3010,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     }
 
     /* We can vote for this slave. */
+    // 更新投票时间并投票
     server.cluster->lastVoteEpoch = server.cluster->currentEpoch;
     node->slaveof->voted_time = mstime();
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|CLUSTER_TODO_FSYNC_CONFIG);
@@ -3208,6 +3215,7 @@ void clusterHandleSlaveFailover(void) {
      * factor configured by the user.
      *
      * Check bypassed for manual failovers. */
+    // 检查当前节点是否有资格进行故障迁移
     if (server.cluster_slave_validity_factor &&
         data_age >
         (((mstime_t)server.repl_ping_slave_period * 1000) +
@@ -3221,12 +3229,14 @@ void clusterHandleSlaveFailover(void) {
 
     /* If the previous failover attempt timeout and the retry time has
      * elapsed, we can setup a new one. */
+    // 更新下一次认证时间，并向从节点传递下线消息。随后return
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = mstime() +
             500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
             random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
+        // 根据repl_offset从大到小排序，得到的排序（排除不参与failover的节点）
         server.cluster->failover_auth_rank = clusterGetSlaveRank();
         /* We add another delay that is proportional to the slave rank.
          * Specifically 1 second * rank. This way slaves that have a probably
@@ -3237,7 +3247,7 @@ void clusterHandleSlaveFailover(void) {
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = mstime();
             server.cluster->failover_auth_rank = 0;
-	    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+			clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
         }
         serverLog(LL_WARNING,
             "Start of election delayed for %lld milliseconds "
@@ -3248,6 +3258,7 @@ void clusterHandleSlaveFailover(void) {
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other slaves so that they'll updated their offsets
          * if our offset is better. */
+        // 向从节点传递主节点已下线的消息
         clusterBroadcastPong(CLUSTER_BROADCAST_LOCAL_SLAVES);
         return;
     }
@@ -3286,11 +3297,11 @@ void clusterHandleSlaveFailover(void) {
 
     /* Ask for votes if needed. */
     if (server.cluster->failover_auth_sent == 0) {
-        server.cluster->currentEpoch++;
+        server.cluster->currentEpoch++; // 集群纪元加一
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_WARNING,"Starting a failover election for epoch %llu.",
             (unsigned long long) server.cluster->currentEpoch);
-        clusterRequestFailoverAuth();
+        clusterRequestFailoverAuth(); // 要求各主节点进行投票
         server.cluster->failover_auth_sent = 1;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                              CLUSTER_TODO_UPDATE_STATE|
@@ -3299,6 +3310,7 @@ void clusterHandleSlaveFailover(void) {
     }
 
     /* Check if we reached the quorum. */
+    // 当前节点被选举为新的主节点
     if (server.cluster->failover_auth_count >= needed_quorum) {
         /* We have the quorum, we can finally failover the master. */
 
@@ -3773,7 +3785,7 @@ void clusterCron(void) {
     if (nodeIsSlave(myself)) {
         clusterHandleManualFailover();
         if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER))
-            clusterHandleSlaveFailover();
+            clusterHandleSlaveFailover(); // 如果主节点下线，从节点需要负责进行故障转移
         /* If there are orphaned slaves, and we are a slave among the masters
          * with the max number of non-failing slaves, consider migrating to
          * the orphaned masters. Note that it does not make sense to try
