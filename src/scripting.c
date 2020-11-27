@@ -754,6 +754,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 
     /* Sort the output array if needed, assuming it is a non-null multi bulk
      * reply as expected. */
+    // 对输出内容进行排序
     if ((cmd->flags & CMD_SORT_FOR_SCRIPT) &&
         (server.lua_replicate_commands == 0) &&
         (reply[0] == '*' && reply[1] != '-')) {
@@ -1104,6 +1105,7 @@ void scriptingInit(int setup) {
     /* Initialize a dictionary we use to map SHAs to scripts.
      * This is useful for replication, as we need to replicate EVALSHA
      * as EVAL, so we need to remember the associated script. */
+    // SHA1校验和到脚本的hahs表
     server.lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
     server.lua_scripts_mem = 0;
 
@@ -1260,6 +1262,7 @@ void scriptingInit(int setup) {
     /* Lua beginners often don't use "local", this is likely to introduce
      * subtle bugs in their code. To prevent problems we protect accesses
      * to global variables. */
+    // 禁止定义全局变量
     scriptingEnableGlobalsProtection(lua);
 
     server.lua = lua;
@@ -1402,6 +1405,7 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
     /* We also save a SHA1 -> Original script map in a dictionary
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
+    // 保存新脚本
     int retval = dictAdd(server.lua_scripts,sha,body);
     serverAssertWithInfo(c ? c : server.lua_client,NULL,retval == DICT_OK);
     server.lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
@@ -1514,9 +1518,11 @@ void evalGenericCommand(client *c, int evalsha) {
     }
 
     /* Push the pcall error handler function on the stack. */
+    // 使用自定义的错误处理逻辑，打印调试信息
     lua_getglobal(lua, "__redis__err__handler");
 
     /* Try to lookup the Lua function */
+    // 装载脚本
     lua_getglobal(lua, funcname);
     if (lua_isnil(lua,-1)) {
         lua_pop(lua,1); /* remove the nil from the stack */
@@ -1528,6 +1534,7 @@ void evalGenericCommand(client *c, int evalsha) {
             addReply(c, shared.noscripterr);
             return;
         }
+        // 保存新脚本
         if (luaCreateFunction(c,lua,c->argv[1]) == NULL) {
             lua_pop(lua,1); /* remove the error handler from the stack. */
             /* The error is sent to the client by luaCreateFunction()
@@ -1541,6 +1548,7 @@ void evalGenericCommand(client *c, int evalsha) {
 
     /* Populate the argv and keys table accordingly to the arguments that
      * EVAL received. */
+    // 设置参数
     luaSetGlobalArray(lua,"KEYS",c->argv+3,numkeys);
     luaSetGlobalArray(lua,"ARGV",c->argv+3+numkeys,c->argc-3-numkeys);
 
@@ -1555,8 +1563,9 @@ void evalGenericCommand(client *c, int evalsha) {
     server.lua_cur_script = funcname + 2;
     server.lua_time_start = mstime();
     server.lua_kill = 0;
+    // 设置钩子函数
     if (server.lua_time_limit > 0 && ldb.active == 0) {
-        lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000);
+        lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000); // 处理超时和kill
         delhook = 1;
     } else if (ldb.active) {
         lua_sethook(server.lua,luaLdbLineHook,LUA_MASKLINE|LUA_MASKCOUNT,100000);
@@ -1573,6 +1582,7 @@ void evalGenericCommand(client *c, int evalsha) {
     resetLuaClient();
 
     /* Perform some cleanup that we need to do both on error and success. */
+    // 解除钩子
     if (delhook) lua_sethook(lua,NULL,0,0); /* Disable hook */
     if (server.lua_timedout) {
         server.lua_timedout = 0;
@@ -1592,6 +1602,7 @@ void evalGenericCommand(client *c, int evalsha) {
      * The call is performed every LUA_GC_CYCLE_PERIOD executed commands
      * (and for LUA_GC_CYCLE_PERIOD collection steps) because calling it
      * for every command uses too much CPU. */
+    // 垃圾回收
     #define LUA_GC_CYCLE_PERIOD 50
     {
         static long gc_count = 0;
@@ -1634,6 +1645,7 @@ void evalGenericCommand(client *c, int evalsha) {
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
     if (evalsha && !server.lua_replicate_commands) {
+        // ？？argv[1]不应该是完整的脚本吗，什么时间变成 sha1 值了
         if (!replicationScriptCacheExists(c->argv[1]->ptr)) {
             /* This script is not in our script cache, replicate it as
              * EVAL, then add it into the script cache, as from now on
@@ -1647,6 +1659,7 @@ void evalGenericCommand(client *c, int evalsha) {
              * just to replicate it as SCRIPT LOAD, otherwise we risk running
              * an aborted script on slaves (that may then produce results there)
              * or just running a CPU costly read-only script on the slaves. */
+            // 重写当前命令，准备向从节点和aof文件传播
             if (server.dirty == initial_server_dirty) {
                 rewriteClientCommandVector(c,3,
                     resetRefCount(createStringObject("SCRIPT",6)),
@@ -1657,6 +1670,7 @@ void evalGenericCommand(client *c, int evalsha) {
                     resetRefCount(createStringObject("EVAL",4)));
                 rewriteClientCommandArgument(c,1,script);
             }
+            // ？？此处没有传播，在哪里传播的？
             forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
         }
     }
